@@ -1,0 +1,13 @@
+services:
+  awg-bot:
+    build: .
+    container_name: awg-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Чтобы бот мог обращаться к контейнеру AmneziaWG через docker exec
+      - /var/run/docker.sock:/var/run/docker.sock
+      - awg-bot-data:/var/lib/awg-bot
+
+volumes:
+  awg-bot-data:

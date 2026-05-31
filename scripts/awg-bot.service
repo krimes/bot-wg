@@ -1,0 +1,22 @@
+[Unit]
+Description=AmneziaWG Telegram Bot
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/awg-bot
+EnvironmentFile=/opt/awg-bot/.env
+ExecStart=/opt/awg-bot/.venv/bin/python -m bot.main
+Restart=on-failure
+RestartSec=5
+User=root
+
+# Безопасность
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
