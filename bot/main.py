@@ -37,6 +37,19 @@ async def main() -> None:
 
     awg = AwgService(settings)
 
+    # Бэкфилл: убеждаемся, что все профили из БД присутствуют в clientsTable.
+    # Это нужно при первом запуске после апгрейда или если файл GUI был очищен.
+    if settings.awg_clients_table_path:
+        try:
+            for p in await db.list_profiles():
+                await awg.register_in_clients_table(
+                    public_key=p.public_key,
+                    name=f"{p.display_name} [tg:{p.created_by}]",
+                )
+            log.info("clientsTable backfill complete")
+        except Exception:  # noqa: BLE001
+            log.exception("clientsTable backfill failed (non-fatal)")
+
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),

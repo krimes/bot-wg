@@ -38,21 +38,21 @@ class NewProfileSG(StatesGroup):
 @router.message(Command("list"))
 @router.message(F.text == "📋 Список")
 async def cmd_list(message: Message, db: Database) -> None:
-    profiles = await db.list_profiles()
+    profiles = await db.list_profiles(created_by=message.from_user.id)
     if not profiles:
-        await message.answer("Профилей пока нет. Создайте через /new или кнопку.")
+        await message.answer("У вас пока нет профилей. Создайте через /new или кнопку.")
         return
     await message.answer(
-        f"Всего профилей: <b>{len(profiles)}</b>\nВыберите для управления:",
+        f"Ваших профилей: <b>{len(profiles)}</b>\nВыберите для управления:",
         reply_markup=profiles_list(profiles),
     )
 
 
 @router.callback_query(F.data == "prof:back")
 async def cb_back(call: CallbackQuery, db: Database) -> None:
-    profiles = await db.list_profiles()
+    profiles = await db.list_profiles(created_by=call.from_user.id)
     await call.message.edit_text(
-        f"Всего профилей: <b>{len(profiles)}</b>\nВыберите для управления:",
+        f"Ваших профилей: <b>{len(profiles)}</b>\nВыберите для управления:",
         reply_markup=profiles_list(profiles),
     )
     await call.answer()
@@ -101,18 +101,21 @@ async def step_name(message: Message, state: FSMContext, db: Database, awg: AwgS
     await _create(message, (message.text or "").strip(), db, awg)
 
 
-async def _create(message: Message, name: str, db: Database, awg: AwgService) -> None:
-    if not NAME_RE.match(name):
+async def _create(message: Message, display_name: str, db: Database, awg: AwgService) -> None:
+    if not NAME_RE.match(display_name):
         await message.answer(
             "❌ Недопустимое имя. Разрешено: латиница, цифры, <code>_</code>, <code>-</code>, длина 2–32.",
         )
         return
 
-    if await db.get_profile_by_name(name):
-        await message.answer(f"❌ Профиль <b>{name}</b> уже существует.")
+    # В БД храним имя с суффиксом telegram-id владельца — это даёт
+    # изолированное пространство имён для каждого админа.
+    db_name = f"{display_name}_{message.from_user.id}"
+    if await db.get_profile_by_name(db_name):
+        await message.answer(f"❌ У вас уже есть профиль <b>{display_name}</b>.")
         return
 
-    status_msg = await message.answer(f"⏳ Создаю профиль <b>{name}</b>…")
+    status_msg = await message.answer(f"⏳ Создаю профиль <b>{display_name}</b>…")
     try:
         server = await awg.server_interface()
         priv, pub = await awg.gen_keypair()
@@ -122,12 +125,18 @@ async def _create(message: Message, name: str, db: Database, awg: AwgService) ->
         await awg.add_peer(public_key=pub, preshared_key=psk, address=address)
 
         profile = await db.add_profile(
-            name=name,
+            name=db_name,
             public_key=pub,
             private_key=priv,
             preshared_key=psk,
             address=address,
             created_by=message.from_user.id,
+        )
+        # Регистрируем в clientsTable, чтобы peer появился в GUI AmneziaVPN.
+        # Помечаем владельца, чтобы админу было видно, чей клиент.
+        await awg.register_in_clients_table(
+            public_key=pub,
+            name=f"{display_name} [tg:{message.from_user.id}]",
         )
         client_conf = awg.build_client_config(
             server=server, private_key=priv, preshared_key=psk, address=address,
@@ -142,7 +151,7 @@ async def _create(message: Message, name: str, db: Database, awg: AwgService) ->
         return
 
     await status_msg.edit_text(
-        f"✅ Профиль <b>{profile.name}</b> создан\n"
+        f"✅ Профиль <b>{profile.display_name}</b> создан\n"
         f"IP: <code>{profile.address}</code>"
     )
     await _send_config_and_qr(message, profile, client_conf)
@@ -214,7 +223,7 @@ async def cb_del_ask(call: CallbackQuery, db: Database) -> None:
     if profile is None:
         return
     await call.message.edit_text(
-        f"Удалить профиль <b>{profile.name}</b> (<code>{profile.address}</code>)?\n"
+        f"Удалить профиль <b>{profile.display_name}</b> (<code>{profile.address}</code>)?\n"
         "Это действие нельзя отменить.",
         reply_markup=confirm_delete(profile.id),
     )
@@ -232,8 +241,9 @@ async def cb_del_yes(call: CallbackQuery, db: Database, awg: AwgService) -> None
         await call.message.answer(f"❌ Ошибка AmneziaWG: <code>{exc}</code>")
         await call.answer()
         return
+    await awg.unregister_from_clients_table(profile.public_key)
     await db.delete_profile(profile.id)
-    await call.message.edit_text(f"🗑 Профиль <b>{profile.name}</b> удалён.")
+    await call.message.edit_text(f"🗑 Профиль <b>{profile.display_name}</b> удалён.")
     await call.answer("Удалено")
 
 
@@ -243,6 +253,11 @@ async def cb_del_yes(call: CallbackQuery, db: Database, awg: AwgService) -> None
 
 
 async def _get_profile_from_cb(call: CallbackQuery, db: Database) -> Profile | None:
+    """Извлекает профиль из callback'а и проверяет, что вызывающий — его владелец.
+
+    Защита от подмены ID в callback_data: даже если другой админ угадает или
+    подделает id, доступ ему не откроется.
+    """
     try:
         profile_id = int(call.data.rsplit(":", 1)[-1])
     except (ValueError, AttributeError):
@@ -251,6 +266,14 @@ async def _get_profile_from_cb(call: CallbackQuery, db: Database) -> Profile | N
     profile = await db.get_profile(profile_id)
     if profile is None:
         await call.answer("Профиль не найден", show_alert=True)
+        return None
+    if profile.created_by != call.from_user.id:
+        log.warning(
+            "user %s tried to access foreign profile %s (owner=%s)",
+            call.from_user.id, profile_id, profile.created_by,
+        )
+        await call.answer("⛔️ Это не ваш профиль", show_alert=True)
+        return None
     return profile
 
 
@@ -258,12 +281,12 @@ def _profile_card(p: Profile) -> str:
     age = datetime.now(timezone.utc) - p.created_at
     days = age.days
     return (
-        f"<b>{p.name}</b>\n"
+        f"<b>{p.display_name}</b>\n"
         f"ID: <code>{p.id}</code>\n"
         f"Адрес: <code>{p.address}</code>\n"
         f"PublicKey: <code>{p.public_key}</code>\n"
         f"Создан: {p.created_at:%Y-%m-%d %H:%M UTC} ({days} дн. назад)\n"
-        f"Автор: <code>{p.created_by}</code>"
+        f"Внутреннее имя: <code>{p.name}</code>"
     )
 
 

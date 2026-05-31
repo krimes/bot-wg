@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     awg_config_path: str = Field(
         alias="AWG_CONFIG_PATH", default="/opt/amnezia/awg/wg0.conf"
     )
+    # Путь к clientsTable внутри контейнера — это JSON-список клиентов,
+    # который читает GUI AmneziaVPN, чтобы показывать «подключённые устройства».
+    # Пустая строка отключает синхронизацию.
+    awg_clients_table_path: str = Field(
+        alias="AWG_CLIENTS_TABLE_PATH", default="/opt/amnezia/awg/clientsTable"
+    )
 
     awg_endpoint_host: str = Field(alias="AWG_ENDPOINT_HOST")
     awg_endpoint_port: int | None = Field(alias="AWG_ENDPOINT_PORT", default=None)

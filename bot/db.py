@@ -36,6 +36,12 @@ class Profile:
     created_by: int
     note: str | None = None
 
+    @property
+    def display_name(self) -> str:
+        """Имя профиля без суффикса _<telegram_id>, как видит его пользователь."""
+        suffix = f"_{self.created_by}"
+        return self.name[: -len(suffix)] if self.name.endswith(suffix) else self.name
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -83,10 +89,16 @@ class Database:
             note=note,
         )
 
-    async def list_profiles(self) -> list[Profile]:
+    async def list_profiles(self, created_by: int | None = None) -> list[Profile]:
+        sql = "SELECT * FROM profiles"
+        params: tuple = ()
+        if created_by is not None:
+            sql += " WHERE created_by = ?"
+            params = (created_by,)
+        sql += " ORDER BY id"
         async with aiosqlite.connect(self._path) as conn:
             conn.row_factory = aiosqlite.Row
-            rows = await conn.execute_fetchall("SELECT * FROM profiles ORDER BY id")
+            rows = await conn.execute_fetchall(sql, params)
         return [_row_to_profile(row) for row in rows]
 
     async def get_profile(self, profile_id: int) -> Profile | None:

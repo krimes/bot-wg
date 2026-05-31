@@ -23,33 +23,40 @@ async def cmd_stats(message: Message, db: Database, awg: AwgService) -> None:
         await message.answer(f"❌ Не удалось получить статистику: <code>{exc}</code>")
         return
 
-    profiles = {p.public_key: p for p in await db.list_profiles()}
+    # Только профили текущего админа — чужие peer'ы не показываем.
+    own_profiles = {
+        p.public_key: p
+        for p in await db.list_profiles(created_by=message.from_user.id)
+    }
+    if not own_profiles:
+        await message.answer("У вас нет профилей. Создайте через /new.")
+        return
+
     now = int(datetime.now(timezone.utc).timestamp())
+    own_peers = [p for p in peers if p.public_key in own_profiles]
 
     online = 0
     lines: list[str] = []
-    for peer in peers:
-        prof = profiles.get(peer.public_key)
-        name = prof.name if prof else "(не в БД)"
+    for peer in own_peers:
+        prof = own_profiles[peer.public_key]
         is_online = peer.latest_handshake and (now - peer.latest_handshake) <= ONLINE_THRESHOLD_SEC
         if is_online:
             online += 1
         marker = "🟢" if is_online else "⚪️"
         hs = _format_handshake(peer.latest_handshake, now)
         lines.append(
-            f"{marker} <b>{name}</b> · {_fmt_bytes(peer.rx_bytes)} ↓ / "
+            f"{marker} <b>{prof.display_name}</b> · {_fmt_bytes(peer.rx_bytes)} ↓ / "
             f"{_fmt_bytes(peer.tx_bytes)} ↑ · {hs}"
         )
 
-    if not lines:
-        await message.answer("Нет peer'ов на интерфейсе.")
-        return
-
     header = (
-        f"📊 <b>Статистика</b>\n"
-        f"Всего peer'ов: <b>{len(peers)}</b> · онлайн: <b>{online}</b>\n\n"
+        f"📊 <b>Ваша статистика</b>\n"
+        f"Ваших профилей: <b>{len(own_profiles)}</b> · "
+        f"активно на интерфейсе: <b>{len(own_peers)}</b> · "
+        f"онлайн: <b>{online}</b>\n\n"
     )
-    await message.answer(header + "\n".join(lines))
+    body = "\n".join(lines) if lines else "<i>Пока ни одного peer'а на интерфейсе.</i>"
+    await message.answer(header + body)
 
 
 def _format_handshake(ts: int, now: int) -> str:

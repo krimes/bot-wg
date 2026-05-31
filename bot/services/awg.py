@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
 import re
 import shlex
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from bot.config import Settings
 
@@ -170,6 +172,71 @@ class AwgService:
         conf = await self.read_server_config()
         new_conf = _remove_peer_block(conf, public_key)
         await self.write_server_config(new_conf)
+
+    # ---------- AmneziaVPN clientsTable ----------
+    #
+    # GUI AmneziaVPN на сервере показывает клиентов из JSON-файла clientsTable
+    # рядом с конфигом WireGuard. Чтобы peer'ы, созданные ботом, появлялись в
+    # окне приложения, дублируем их в этот файл.
+    # Все операции best-effort: при любой ошибке логируем и не падаем.
+
+    async def register_in_clients_table(self, *, public_key: str, name: str) -> None:
+        if not self._s.awg_clients_table_path:
+            return
+        try:
+            data = await self._read_clients_table()
+            if any(item.get("clientId") == public_key for item in data):
+                return  # уже зарегистрирован
+            data.append({
+                "clientId": public_key,
+                "userData": {
+                    "clientName": name,
+                    "creationDate": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                },
+            })
+            await self._write_clients_table(data)
+        except Exception:  # noqa: BLE001
+            log.exception("clientsTable: не удалось добавить %s", public_key)
+
+    async def unregister_from_clients_table(self, public_key: str) -> None:
+        if not self._s.awg_clients_table_path:
+            return
+        try:
+            data = await self._read_clients_table()
+            new = [item for item in data if item.get("clientId") != public_key]
+            if len(new) != len(data):
+                await self._write_clients_table(new)
+        except Exception:  # noqa: BLE001
+            log.exception("clientsTable: не удалось удалить %s", public_key)
+
+    async def _read_clients_table(self) -> list[dict]:
+        path = self._s.awg_clients_table_path
+        # cat вернёт ошибку, если файла нет — считаем это пустой таблицей
+        try:
+            raw = await self._exec("cat", path)
+        except AwgError as exc:
+            log.info("clientsTable: файл %s не найден (%s) — стартуем с пустой", path, exc)
+            return []
+        raw = raw.strip()
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            log.warning("clientsTable: %s содержит невалидный JSON, пропускаю", path)
+            return []
+        return data if isinstance(data, list) else []
+
+    async def _write_clients_table(self, data: list[dict]) -> None:
+        path = self._s.awg_clients_table_path
+        content = json.dumps(data, indent=4, ensure_ascii=False)
+        # atomic write: пишем во временный файл и переименовываем
+        tmp = f"{path}.tmp"
+        await self._exec(
+            "sh", "-c",
+            f"cat > {shlex.quote(tmp)} && mv {shlex.quote(tmp)} {shlex.quote(path)}",
+            input_=content,
+        )
 
     # ---------- статистика ----------
 

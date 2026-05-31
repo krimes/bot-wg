@@ -18,7 +18,9 @@ def main_menu() -> ReplyKeyboardMarkup:
 
 def profiles_list(profiles: list[Profile]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=f"#{p.id} · {p.name}", callback_data=f"prof:show:{p.id}")]
+        [InlineKeyboardButton(
+            text=f"#{p.id} · {p.display_name}", callback_data=f"prof:show:{p.id}"
+        )]
         for p in profiles
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows or [
