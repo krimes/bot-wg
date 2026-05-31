@@ -30,7 +30,9 @@ class ServerInterface:
 
     public_key: str
     listen_port: int
-    # AmneziaWG-обфускация. Если их нет — это обычный WireGuard.
+    # AmneziaWG-обфускация: словарь ключ -> значение в порядке, как они шли в
+    # серверном конфиге. Если AWG не настроен — словарь пустой и клиент
+    # подключится как обычный WireGuard.
     obfuscation: dict[str, str]
 
 
@@ -44,8 +46,16 @@ class PeerStats:
     tx_bytes: int
 
 
-# Параметры обфускации AmneziaWG, которые нужно переносить из server -> client.
-OBFUSCATION_KEYS = ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4")
+# Стандартные ключи секции [Interface] обычного WireGuard / wg-quick.
+# Всё, что присутствует в [Interface] и НЕ входит в этот набор, считаем
+# параметрами обфускации AmneziaWG (Jc/Jmin/Jmax/S1..S4/H1..H4/I1..I5/J1..J3/Itime
+# и любые будущие) и переносим в клиентский конфиг.
+# Это устойчиво к новым версиям AWG: добавлять код при появлении нового
+# параметра не нужно.
+STANDARD_WG_INTERFACE_KEYS = frozenset({
+    "PrivateKey", "ListenPort", "FwMark", "Address", "DNS", "MTU",
+    "Table", "PreUp", "PostUp", "PreDown", "PostDown", "SaveConfig",
+})
 
 
 class AwgService:
@@ -115,7 +125,15 @@ class AwgService:
         if not port_str:
             raise AwgError("В [Interface] нет ListenPort")
 
-        obfuscation = {k: interface[k] for k in OBFUSCATION_KEYS if k in interface}
+        # Всё, что не входит в стандартный WireGuard-набор, считаем AWG-обфускацией.
+        # dict сохраняет порядок вставки, а _extract_section идёт по строкам сверху
+        # вниз — значит порядок в клиентском конфиге совпадёт с серверным.
+        obfuscation = {
+            k: v for k, v in interface.items()
+            if k not in STANDARD_WG_INTERFACE_KEYS
+        }
+        if obfuscation:
+            log.debug("AWG obfuscation params: %s", ", ".join(obfuscation))
         return ServerInterface(
             public_key=pub,
             listen_port=int(port_str),
@@ -283,10 +301,10 @@ class AwgService:
             f"Address = {address}",
             f"DNS = {', '.join(s.awg_client_dns)}",
         ]
-        # Параметры обфускации AmneziaWG обязательно должны попасть в клиент.
-        for k in OBFUSCATION_KEYS:
-            if k in server.obfuscation:
-                lines.append(f"{k} = {server.obfuscation[k]}")
+        # Все параметры обфускации AmneziaWG, какие есть у сервера, обязаны
+        # попасть к клиенту — порядок сохраняем как у сервера (см. server_interface).
+        for k, v in server.obfuscation.items():
+            lines.append(f"{k} = {v}")
         lines += [
             "",
             "[Peer]",
