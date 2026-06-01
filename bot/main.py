@@ -63,6 +63,7 @@ async def main() -> None:
     # Прокидываем зависимости в handler'ы через workflow_data
     dp["db"] = db
     dp["awg"] = awg
+    dp["settings"] = settings
 
     dp.include_router(root_router)
 

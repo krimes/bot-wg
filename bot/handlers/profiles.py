@@ -16,6 +16,7 @@ from aiogram.types import (
     Message,
 )
 
+from bot.config import Settings
 from bot.db import Database, Profile
 from bot.keyboards import confirm_delete, main_menu, profile_actions, profiles_list
 from bot.services.awg import AwgError, AwgService
@@ -76,7 +77,10 @@ async def cb_show(call: CallbackQuery, db: Database) -> None:
 
 
 @router.message(Command("new"))
-async def cmd_new(message: Message, command: CommandObject, state: FSMContext, db: Database, awg: AwgService) -> None:
+async def cmd_new(
+    message: Message, command: CommandObject, state: FSMContext,
+    db: Database, awg: AwgService, settings: Settings,
+) -> None:
     name = (command.args or "").strip()
     if not name:
         await state.set_state(NewProfileSG.waiting_name)
@@ -84,7 +88,7 @@ async def cmd_new(message: Message, command: CommandObject, state: FSMContext, d
             "Введите имя профиля (латиница, цифры, _ или -, длина 2–32):"
         )
         return
-    await _create(message, name, db, awg)
+    await _create(message, name, db, awg, settings)
 
 
 @router.message(F.text == "➕ Новый профиль")
@@ -96,12 +100,18 @@ async def btn_new(message: Message, state: FSMContext) -> None:
 
 
 @router.message(NewProfileSG.waiting_name)
-async def step_name(message: Message, state: FSMContext, db: Database, awg: AwgService) -> None:
+async def step_name(
+    message: Message, state: FSMContext,
+    db: Database, awg: AwgService, settings: Settings,
+) -> None:
     await state.clear()
-    await _create(message, (message.text or "").strip(), db, awg)
+    await _create(message, (message.text or "").strip(), db, awg, settings)
 
 
-async def _create(message: Message, display_name: str, db: Database, awg: AwgService) -> None:
+async def _create(
+    message: Message, display_name: str,
+    db: Database, awg: AwgService, settings: Settings,
+) -> None:
     if not NAME_RE.match(display_name):
         await message.answer(
             "❌ Недопустимое имя. Разрешено: латиница, цифры, <code>_</code>, <code>-</code>, длина 2–32.",
@@ -155,7 +165,12 @@ async def _create(message: Message, display_name: str, db: Database, awg: AwgSer
         f"IP: <code>{profile.address}</code>"
     )
     await _send_config_and_qr(message, profile, client_conf)
-    await message.answer("Готово.", reply_markup=main_menu())
+    await message.answer(
+        "Готово.",
+        reply_markup=main_menu(
+            link_button_text=settings.link_button_text if settings.link_url else None,
+        ),
+    )
 
 
 # ============================================================

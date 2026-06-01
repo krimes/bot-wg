@@ -60,6 +60,8 @@ sudo journalctl -u awg-bot -f
 | `AWG_CLIENT_ALLOWED_IPS` | `AllowedIPs` клиента (по умолчанию весь трафик) |
 | `AWG_CLIENT_KEEPALIVE` | PersistentKeepalive (`0` чтобы отключить) |
 | `DB_PATH` | путь к SQLite-файлу с метаданными |
+| `LINK_URL` | (опц.) URL, который покажет кнопка в главном меню |
+| `LINK_BUTTON_TEXT` | (опц.) текст кнопки-ссылки, по умолчанию `🔗 Ссылка` |
 
 ## Команды бота
 

@@ -55,6 +55,11 @@ class Settings(BaseSettings):
 
     db_path: Path = Field(alias="DB_PATH", default=Path("awg-bot.db"))
 
+    # Опциональная ссылка-кнопка в главном меню (например, на скачивание
+    # клиента или на чат поддержки). Если LINK_URL пуст — кнопка не показывается.
+    link_url: str | None = Field(alias="LINK_URL", default=None)
+    link_button_text: str = Field(alias="LINK_BUTTON_TEXT", default="🔗 Ссылка")
+
     @field_validator("admin_ids", "awg_client_dns", "awg_client_allowed_ips", mode="before")
     @classmethod
     def _split_csv(cls, v):
@@ -62,7 +67,7 @@ class Settings(BaseSettings):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
-    @field_validator("awg_endpoint_port", mode="before")
+    @field_validator("awg_endpoint_port", "link_url", mode="before")
     @classmethod
     def _empty_str_to_none(cls, v):
         if isinstance(v, str) and not v.strip():

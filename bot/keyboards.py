@@ -5,15 +5,27 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeybo
 from bot.db import Profile
 
 
-def main_menu() -> ReplyKeyboardMarkup:
+def main_menu(link_button_text: str | None = None) -> ReplyKeyboardMarkup:
+    """Главное reply-меню. Если задан link_button_text, добавляем третью строку
+    с кнопкой-триггером для отправки URL-ссылки (URL в reply-клавиатуре
+    Telegram не поддерживается — отдаём через inline-кнопку в ответе)."""
+    rows = [
+        [KeyboardButton(text="➕ Новый профиль"), KeyboardButton(text="📋 Список")],
+        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="ℹ️ Помощь")],
+    ]
+    if link_button_text:
+        rows.append([KeyboardButton(text=link_button_text)])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="➕ Новый профиль"), KeyboardButton(text="📋 Список")],
-            [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="ℹ️ Помощь")],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         input_field_placeholder="Выберите действие",
     )
+
+
+def link_kb(url: str, text: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=text, url=url)],
+    ])
 
 
 def profiles_list(profiles: list[Profile]) -> InlineKeyboardMarkup:

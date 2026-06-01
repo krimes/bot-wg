@@ -111,7 +111,16 @@ class AwgService:
         )
 
     async def server_interface(self) -> ServerInterface:
-        conf = await self.read_server_config()
+        # Источник истины — running config интерфейса. В файле wg0.conf,
+        # который кладёт Amnezia, могут отсутствовать новые параметры
+        # обфускации (I1, S3, S4, Itime ...) — контейнер досыпает их в
+        # рантайм через `awg set`/`syncconf` при старте.
+        # `awg showconf` всегда показывает то, чем интерфейс реально пользуется.
+        try:
+            conf = await self._exec("awg", "showconf", self._s.awg_interface)
+        except AwgError as exc:
+            log.warning("awg showconf не сработал (%s), читаю файл-конфиг", exc)
+            conf = await self.read_server_config()
         interface = _extract_section(conf, "Interface")
         if interface is None:
             raise AwgError("В серверном конфиге нет секции [Interface]")
