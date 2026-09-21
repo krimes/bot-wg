@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Вход — AmneziaWG</title>
+  <title>Вход</title>
   <style>
     :root {
       --bg: #12160f;
@@ -56,8 +56,8 @@
 </head>
 <body>
   <form method="post" action="/login" autocomplete="current-password">
-    <h1>Первичный доступ</h1>
-    <p class="lead">Пароль выдаёт администратор. Дальше выберите себя в списке и получите конфиг AmneziaWG.</p>
+    <h1>Вход</h1>
+    <p class="lead">Пароль выдаёт администратор.</p>
     {% if error %}<div class="err">{{ error }}</div>{% endif %}
     <label for="password">Пароль</label>
     <input id="password" name="password" type="password" required autofocus>
