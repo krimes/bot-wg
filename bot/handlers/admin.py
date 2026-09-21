@@ -4,23 +4,25 @@ import asyncio
 import html
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
-from bot.access import merge_recipient_ids
+from bot.access import format_person_label, merge_recipient_ids
 from bot.config import Settings
-from bot.db import Database
+from bot.db import BotUser, Database
 from bot.keyboards import (
     BTN_BROADCAST,
     BTN_CANCEL,
     BTN_USERS,
     MENU_BUTTON_TEXTS,
+    UserListRow,
     cancel_kb,
     confirm_broadcast_kb,
+    back_to_users_kb,
     confirm_delete_user_kb,
     reply_menu,
     user_actions_kb,
@@ -65,25 +67,48 @@ async def cmd_users(
     message: Message, state: FSMContext, db: Database, settings: Settings,
 ) -> None:
     await state.clear()
+    rows = await _collect_rows(message.bot, db, settings)
     await message.answer(
-        await _users_text(db, settings),
+        _list_message(rows, settings),
         reply_markup=_menu(message, settings),
     )
-    await message.answer("Выберите:", reply_markup=await _users_kb(db, settings))
+    await message.answer("Управление:", reply_markup=users_list_kb(rows))
 
 
-@router.callback_query(F.data == "usr:noop")
-async def cb_usr_noop(call: CallbackQuery) -> None:
-    await call.answer("Это админ из .env — правится только там.", show_alert=True)
+@router.callback_query(F.data.startswith("usr:env:"))
+async def cb_usr_env(
+    call: CallbackQuery, db: Database, settings: Settings,
+) -> None:
+    uid = _cb_int(call)
+    if uid is None:
+        return
+    first, last, uname = await _resolve_names(call.bot, db, uid)
+    label = format_person_label(
+        first_name=first, last_name=last, username=uname, telegram_id=uid,
+    )
+    role = "главный админ" if settings.is_main_admin(uid) else "админ из .env"
+    nick = f"@{html.escape(uname)}" if uname else "—"
+    fio = " ".join(p for p in (first, last) if p) or "—"
+    await call.message.edit_text(
+        f"<b>{html.escape(label)}</b>\n"
+        f"ФИ: {html.escape(fio)}\n"
+        f"Ник: {nick}\n"
+        f"ID: <code>{uid}</code>\n"
+        f"Роль: {role}\n"
+        "Удаляется только из ADMIN_IDS в .env.",
+        reply_markup=back_to_users_kb(),
+    )
+    await call.answer()
 
 
 @router.callback_query(F.data == "usr:list")
 async def cb_usr_list(
     call: CallbackQuery, db: Database, settings: Settings,
 ) -> None:
+    rows = await _collect_rows(call.bot, db, settings)
     await call.message.edit_text(
-        await _users_text(db, settings),
-        reply_markup=await _users_kb(db, settings),
+        _list_message(rows, settings),
+        reply_markup=users_list_kb(rows),
     )
     await call.answer()
 
@@ -145,12 +170,18 @@ async def cb_usr_show(call: CallbackQuery, db: Database) -> None:
     if user is None:
         await call.answer("Пользователь не найден", show_alert=True)
         return
+    first, last, uname = await _resolve_names(call.bot, db, uid, stored=user)
+    label = format_person_label(
+        first_name=first, last_name=last, username=uname, telegram_id=uid,
+    )
     status = "включён" if user.enabled else "выключен"
-    uname = f"@{html.escape(user.username)}" if user.username else "—"
+    nick = f"@{html.escape(uname)}" if uname else "—"
+    fio = " ".join(p for p in (first, last) if p) or "—"
     await call.message.edit_text(
-        f"<b>{html.escape(user.label)}</b>\n"
+        f"<b>{html.escape(label)}</b>\n"
+        f"ФИ: {html.escape(fio)}\n"
+        f"Ник: {nick}\n"
         f"ID: <code>{user.telegram_id}</code>\n"
-        f"Username: {uname}\n"
         f"Статус: {status}\n"
         f"Добавлен: {user.created_at:%Y-%m-%d %H:%M UTC}",
         reply_markup=user_actions_kb(user.telegram_id, user.enabled),
@@ -205,9 +236,10 @@ async def cb_usr_del_yes(
     if deleted is None:
         await call.answer("Уже удалён", show_alert=True)
         return
+    rows = await _collect_rows(call.bot, db, settings)
     await call.message.edit_text(
-        f"🗑 {html.escape(deleted.label)} удалён.",
-        reply_markup=await _users_kb(db, settings),
+        f"🗑 {html.escape(deleted.label)} удалён.\n\n" + _list_message(rows, settings),
+        reply_markup=users_list_kb(rows),
     )
     await call.answer("Удалено")
 
@@ -336,24 +368,92 @@ async def broadcast_yes(
 # ============================================================
 
 
-async def _users_text(db: Database, settings: Settings) -> str:
-    users = await db.list_bot_users()
-    enabled = sum(1 for u in users if u.enabled)
-    return (
-        "<b>👥 Пользователи бота</b>\n"
-        f"Из .env (ADMIN_IDS): <b>{len(settings.admin_ids)}</b>\n"
-        f"В базе: <b>{len(users)}</b> · включено: <b>{enabled}</b>\n\n"
-        "Добавленные в базу могут создавать свои профили WG/Happ.\n"
-        "Админы из .env всегда имеют доступ."
-    )
+def _list_message(rows: list[UserListRow], settings: Settings) -> str:
+    db_n = sum(1 for r in rows if r.kind == "db")
+    enabled = sum(1 for r in rows if r.kind == "db" and r.enabled)
+    lines = [
+        "<b>👥 Пользователи бота</b>",
+        f".env: <b>{len(settings.admin_ids)}</b> · в базе: <b>{db_n}</b> · "
+        f"включено: <b>{enabled}</b>",
+        "",
+    ]
+    for row in rows:
+        if row.kind == "env":
+            mark = "👑" if row.is_main else "🛡"
+            tag = " · .env"
+        else:
+            mark = "✅" if row.enabled else "⏸"
+            tag = "" if row.enabled else " · выкл"
+        lines.append(f"{mark} {html.escape(row.title)}{tag}")
+        lines.append(f"<code>{row.telegram_id}</code>")
+        lines.append("")
+    if not rows:
+        lines.append("Пока никого нет.")
+    return "\n".join(lines).rstrip()
 
 
-async def _users_kb(db: Database, settings: Settings):
-    return users_list_kb(
-        await db.list_bot_users(),
-        settings.admin_ids,
-        settings.resolved_main_admin_id(),
-    )
+async def _collect_rows(bot: Bot, db: Database, settings: Settings) -> list[UserListRow]:
+    db_users = await db.list_bot_users()
+    env_ids = set(settings.admin_ids)
+    main_id = settings.resolved_main_admin_id()
+    rows: list[UserListRow] = []
+    for aid in settings.admin_ids:
+        first, last, uname = await _resolve_names(bot, db, aid)
+        rows.append(UserListRow(
+            telegram_id=aid,
+            title=format_person_label(
+                first_name=first, last_name=last, username=uname, telegram_id=aid,
+            ),
+            kind="env",
+            is_main=aid == main_id,
+        ))
+    for user in db_users:
+        if user.telegram_id in env_ids:
+            continue
+        first, last, uname = await _resolve_names(bot, db, user.telegram_id, stored=user)
+        rows.append(UserListRow(
+            telegram_id=user.telegram_id,
+            title=format_person_label(
+                first_name=first, last_name=last, username=uname,
+                telegram_id=user.telegram_id,
+            ),
+            kind="db",
+            enabled=user.enabled,
+        ))
+    return rows
+
+
+async def _resolve_names(
+    bot: Bot,
+    db: Database,
+    telegram_id: int,
+    stored: BotUser | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    first = last = uname = None
+    try:
+        chat = await bot.get_chat(telegram_id)
+        first = chat.first_name
+        last = chat.last_name
+        uname = chat.username
+    except Exception:  # noqa: BLE001
+        log.debug("get_chat failed uid=%s", telegram_id, exc_info=True)
+    if first or last or uname:
+        try:
+            await db.upsert_telegram_profile(
+                telegram_id=telegram_id,
+                first_name=first,
+                last_name=last,
+                username=uname,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("profile upsert failed uid=%s", telegram_id)
+        return first, last, uname
+    cached = await db.get_telegram_profile(telegram_id)
+    if cached and (cached.first_name or cached.last_name or cached.username):
+        return cached.first_name, cached.last_name, cached.username
+    if stored:
+        return stored.name, None, stored.username
+    return None, None, None
 
 
 async def _recipients(db: Database, settings: Settings, sender_id: int) -> list[int]:

@@ -42,4 +42,19 @@ class AccessMiddleware(BaseMiddleware):
                 await event.answer("⛔️ Доступ запрещён.", show_alert=True)
             return None
         data["is_main_admin"] = self._s.is_main_admin(uid)
+        try:
+            fio = " ".join(
+                p for p in (user.first_name, getattr(user, "last_name", None)) if p
+            ) or None
+            await self._db.upsert_telegram_profile(
+                telegram_id=uid,
+                first_name=user.first_name,
+                last_name=getattr(user, "last_name", None),
+                username=user.username,
+            )
+            await self._db.touch_bot_user_profile(
+                uid, name=fio, username=user.username,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("failed to refresh telegram profile uid=%s", uid)
         return await handler(event, data)

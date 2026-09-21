@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from bot.access import is_main_admin, merge_recipient_ids, resolve_main_admin_id
+from bot.access import (
+    format_person_label,
+    is_main_admin,
+    merge_recipient_ids,
+    resolve_main_admin_id,
+)
 
 
 def test_main_admin_defaults_to_first_env_admin():
@@ -22,3 +27,21 @@ def test_merge_recipients_unique_and_skips_sender():
         sender_id=11,
     )
     assert ids == [22, 33, 44]
+
+
+def test_format_person_label_fio_and_username():
+    assert format_person_label(
+        first_name="Иван", last_name="Петров", username="ivan", telegram_id=11,
+    ) == "Иван Петров · @ivan"
+
+
+def test_format_person_label_falls_back():
+    assert format_person_label(
+        first_name=None, last_name=None, username="maria", telegram_id=22,
+    ) == "@maria"
+    assert format_person_label(
+        first_name="Пётр", last_name=None, username=None, telegram_id=33,
+    ) == "Пётр"
+    assert format_person_label(
+        first_name=None, last_name=None, username=None, telegram_id=44,
+    ) == "44"

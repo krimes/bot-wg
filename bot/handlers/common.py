@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.filters import BaseFilter, Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.config import Settings
@@ -23,8 +24,8 @@ def _help_text(settings: Settings, user_id: int) -> str:
     lines = [
         "🛡 <b>AmneziaWG + Happ</b>\n",
         "Команды:",
-        "• /new <code>имя</code> — создать профиль AmneziaWG",
-        "• /happ <code>имя</code> — создать клиента Happ (VLESS)",
+        "• /new — добавить профиль (WG или Happ)",
+        "• /happ <code>имя</code> — сразу клиент Happ",
         "• /list — список профилей",
         "• /stats — статистика подключений",
     ]
@@ -43,7 +44,8 @@ def _help_text(settings: Settings, user_id: int) -> str:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, settings: Settings) -> None:
+async def cmd_start(message: Message, state: FSMContext, settings: Settings) -> None:
+    await state.clear()
     uid = message.from_user.id
     await message.answer(
         _help_text(settings, uid),
@@ -53,7 +55,8 @@ async def cmd_start(message: Message, settings: Settings) -> None:
 
 @router.message(Command("help"))
 @router.message(F.text == BTN_HELP)
-async def cmd_help(message: Message, settings: Settings) -> None:
+async def cmd_help(message: Message, state: FSMContext, settings: Settings) -> None:
+    await state.clear()
     uid = message.from_user.id
     await message.answer(
         _help_text(settings, uid),

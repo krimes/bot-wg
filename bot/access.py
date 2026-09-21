@@ -16,6 +16,19 @@ def is_main_admin(
     return mid is not None and user_id == mid
 
 
+def format_person_label(
+    *,
+    first_name: str | None,
+    last_name: str | None,
+    username: str | None,
+    telegram_id: int,
+) -> str:
+    fio = " ".join(p for p in (first_name, last_name) if p) or None
+    nick = f"@{username}" if username else None
+    parts = [p for p in (fio, nick) if p]
+    return " · ".join(parts) if parts else str(telegram_id)
+
+
 def merge_recipient_ids(
     *,
     env_admins: list[int],

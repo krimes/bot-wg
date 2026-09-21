@@ -16,9 +16,13 @@ from aiogram.types import (
 
 from bot.config import Settings
 from bot.db import Database, Profile
+from bot.filters import NotMenuButton
 from bot.keyboards import (
     BTN_LIST,
+    BTN_NEW_PROFILE,
+    BTN_NEW_PROFILE_LEGACY,
     BTN_NEW_WG,
+    choose_profile_type_kb,
     confirm_delete,
     profile_actions,
     profiles_list,
@@ -44,11 +48,15 @@ class NewProfileSG(StatesGroup):
 
 @router.message(Command("list"))
 @router.message(F.text == BTN_LIST)
-async def cmd_list(message: Message, db: Database) -> None:
+async def cmd_list(message: Message, state: FSMContext, db: Database) -> None:
+    await state.clear()
     wg = await db.list_profiles(created_by=message.from_user.id)
     happ = await db.list_happ_profiles(created_by=message.from_user.id)
     if not wg and not happ:
-        await message.answer("У вас пока нет профилей. Создайте через /new, /happ или кнопки.")
+        await message.answer(
+            "У вас пока нет профилей. Нажмите «Добавить профиль» и выберите WG или Happ.",
+            reply_markup=profiles_list([], []),
+        )
         return
     await message.answer(
         _list_header(len(wg), len(happ)),
@@ -98,23 +106,64 @@ async def cmd_new(
 ) -> None:
     name = (command.args or "").strip()
     if not name:
-        await state.set_state(NewProfileSG.waiting_name)
+        await state.clear()
         await message.answer(
-            "Введите имя профиля (латиница, цифры, _ или -, длина 2–32):"
+            "Что создать?",
+            reply_markup=choose_profile_type_kb(),
         )
         return
     await _create(message, name, db, awg, settings)
+
+
+@router.message(F.text.in_({BTN_NEW_PROFILE, BTN_NEW_PROFILE_LEGACY}))
+async def btn_add_profile(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        "Что создать?",
+        reply_markup=choose_profile_type_kb(),
+    )
+
+
+@router.callback_query(F.data == "new:choose")
+async def cb_choose(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await call.message.edit_text(
+        "Что создать?",
+        reply_markup=choose_profile_type_kb(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "noop")
+async def cb_noop(call: CallbackQuery) -> None:
+    await call.answer()
+
+
+@router.callback_query(F.data == "new:cancel")
+async def cb_cancel(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await call.message.edit_text("Отменено.")
+    await call.answer("Отменено")
 
 
 @router.message(F.text == BTN_NEW_WG)
 async def btn_new(message: Message, state: FSMContext) -> None:
     await state.set_state(NewProfileSG.waiting_name)
     await message.answer(
-        "Введите имя профиля (латиница, цифры, _ или -, длина 2–32):"
+        "🛡 <b>AmneziaWG</b>\nВведите имя профиля (латиница, цифры, <code>_</code> или <code>-</code>, 2–32):"
     )
 
 
-@router.message(NewProfileSG.waiting_name)
+@router.callback_query(F.data == "new:wg")
+async def cb_new_wg(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(NewProfileSG.waiting_name)
+    await call.message.edit_text(
+        "🛡 <b>AmneziaWG</b>\nВведите имя профиля (латиница, цифры, <code>_</code> или <code>-</code>, 2–32):"
+    )
+    await call.answer()
+
+
+@router.message(NewProfileSG.waiting_name, NotMenuButton())
 async def step_name(
     message: Message, state: FSMContext,
     db: Database, awg: AwgService, settings: Settings,

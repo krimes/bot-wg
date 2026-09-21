@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS bot_users (
     created_at      TEXT    NOT NULL,
     created_by      INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS telegram_profiles (
+    telegram_id     INTEGER PRIMARY KEY,
+    first_name      TEXT,
+    last_name       TEXT,
+    username        TEXT,
+    updated_at      TEXT    NOT NULL
+);
 """
 
 
@@ -101,6 +109,15 @@ class BotUser:
         if self.username:
             return f"@{self.username}"
         return str(self.telegram_id)
+
+
+@dataclass(slots=True)
+class TelegramProfile:
+    telegram_id: int
+    first_name: str | None
+    last_name: str | None
+    username: str | None
+    updated_at: datetime
 
 
 class Database:
@@ -326,6 +343,54 @@ class Database:
             await conn.commit()
         return await self.get_bot_user(telegram_id)
 
+    async def touch_bot_user_profile(
+        self,
+        telegram_id: int,
+        *,
+        name: str | None,
+        username: str | None,
+    ) -> None:
+        async with aiosqlite.connect(self._path) as conn:
+            await conn.execute(
+                "UPDATE bot_users SET name = ?, username = ? WHERE telegram_id = ?",
+                (name, username, telegram_id),
+            )
+            await conn.commit()
+
+    async def upsert_telegram_profile(
+        self,
+        *,
+        telegram_id: int,
+        first_name: str | None,
+        last_name: str | None,
+        username: str | None,
+    ) -> None:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self._path) as conn:
+            await conn.execute(
+                """
+                INSERT INTO telegram_profiles
+                    (telegram_id, first_name, last_name, username, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                    first_name = excluded.first_name,
+                    last_name = excluded.last_name,
+                    username = excluded.username,
+                    updated_at = excluded.updated_at
+                """,
+                (telegram_id, first_name, last_name, username, updated_at),
+            )
+            await conn.commit()
+
+    async def get_telegram_profile(self, telegram_id: int) -> TelegramProfile | None:
+        async with aiosqlite.connect(self._path) as conn:
+            conn.row_factory = aiosqlite.Row
+            row = await (await conn.execute(
+                "SELECT * FROM telegram_profiles WHERE telegram_id = ?",
+                (telegram_id,),
+            )).fetchone()
+        return _row_to_tg_profile(row) if row else None
+
     async def delete_bot_user(self, telegram_id: int) -> BotUser | None:
         user = await self.get_bot_user(telegram_id)
         if user is None:
@@ -373,4 +438,14 @@ def _row_to_bot_user(row: aiosqlite.Row) -> BotUser:
         enabled=bool(row["enabled"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         created_by=row["created_by"],
+    )
+
+
+def _row_to_tg_profile(row: aiosqlite.Row) -> TelegramProfile:
+    return TelegramProfile(
+        telegram_id=row["telegram_id"],
+        first_name=row["first_name"],
+        last_name=row["last_name"],
+        username=row["username"],
+        updated_at=datetime.fromisoformat(row["updated_at"]),
     )

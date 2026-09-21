@@ -13,6 +13,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from bot.config import Settings
 from bot.db import Database, HappProfile
+from bot.filters import NotMenuButton
 from bot.keyboards import (
     BTN_NEW_HAPP,
     confirm_delete_happ,
@@ -39,8 +40,7 @@ async def cmd_happ(
 ) -> None:
     if not xui.enabled:
         await message.answer(
-            "❌ 3X-UI не настроен. Задайте <code>XUI_HOST</code> и "
-            "<code>XUI_INBOUND_ID</code> в .env."
+            "❌ Happ недоступен: панель 3X-UI не настроена на сервере."
         )
         return
     name = (command.args or "").strip()
@@ -59,17 +59,33 @@ async def btn_new_happ(
 ) -> None:
     if not xui.enabled:
         await message.answer(
-            "❌ 3X-UI не настроен. Задайте <code>XUI_HOST</code> и "
-            "<code>XUI_INBOUND_ID</code> в .env."
+            "❌ Happ недоступен: панель 3X-UI не настроена на сервере."
         )
         return
     await state.set_state(NewHappSG.waiting_name)
     await message.answer(
-        "Введите имя Happ-профиля (латиница, цифры, _ или -, длина 2–32):"
+        "📱 <b>Happ</b>\nВведите имя профиля (латиница, цифры, <code>_</code> или <code>-</code>, 2–32):"
     )
 
 
-@router.message(NewHappSG.waiting_name)
+@router.callback_query(F.data == "new:happ")
+async def cb_new_happ(
+    call: CallbackQuery, state: FSMContext, xui: XuiService,
+) -> None:
+    if not xui.enabled:
+        await call.message.edit_text(
+            "❌ Happ недоступен: панель 3X-UI не настроена на сервере."
+        )
+        await call.answer("Happ не настроен", show_alert=True)
+        return
+    await state.set_state(NewHappSG.waiting_name)
+    await call.message.edit_text(
+        "📱 <b>Happ</b>\nВведите имя профиля (латиница, цифры, <code>_</code> или <code>-</code>, 2–32):"
+    )
+    await call.answer()
+
+
+@router.message(NewHappSG.waiting_name, NotMenuButton())
 async def step_name(
     message: Message, state: FSMContext,
     db: Database, xui: XuiService, settings: Settings,

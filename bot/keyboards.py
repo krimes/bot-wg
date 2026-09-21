@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
-from bot.access import is_main_admin
-from bot.db import BotUser, HappProfile, Profile
+from dataclasses import dataclass
 
+from bot.access import is_main_admin
+from bot.db import HappProfile, Profile
+
+BTN_NEW_PROFILE = "➕ Добавить профиль"
+BTN_NEW_PROFILE_LEGACY = "➕ Новый профиль"
 BTN_NEW_WG = "➕ Новый WG"
 BTN_NEW_HAPP = "➕ Новый Happ"
 BTN_LIST = "📋 Список"
@@ -15,8 +19,9 @@ BTN_BROADCAST = "📣 Рассылка"
 BTN_CANCEL = "❌ Отмена"
 
 MENU_BUTTON_TEXTS = frozenset({
+    BTN_NEW_PROFILE, BTN_NEW_PROFILE_LEGACY,
     BTN_NEW_WG, BTN_NEW_HAPP, BTN_LIST, BTN_STATS, BTN_HELP,
-    BTN_USERS, BTN_BROADCAST,
+    BTN_USERS, BTN_BROADCAST, BTN_CANCEL,
 })
 
 
@@ -27,6 +32,7 @@ def main_menu(
 ) -> ReplyKeyboardMarkup:
     """Главное reply-меню. У главного админа — отдельная секция управления."""
     rows = [
+        [KeyboardButton(text=BTN_NEW_PROFILE)],
         [KeyboardButton(text=BTN_NEW_WG), KeyboardButton(text=BTN_NEW_HAPP)],
         [KeyboardButton(text=BTN_LIST), KeyboardButton(text=BTN_STATS)],
         [KeyboardButton(text=BTN_HELP)],
@@ -66,6 +72,16 @@ def link_kb(url: str, text: str) -> InlineKeyboardMarkup:
     ])
 
 
+def choose_profile_type_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🛡 AmneziaWG", callback_data="new:wg"),
+            InlineKeyboardButton(text="📱 Happ", callback_data="new:happ"),
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="new:cancel")],
+    ])
+
+
 def profiles_list(
     wg: list[Profile],
     happ: list[HappProfile] | None = None,
@@ -80,9 +96,14 @@ def profiles_list(
         rows.append([InlineKeyboardButton(
             text=f"Happ · {p.display_name}", callback_data=f"happ:show:{p.id}"
         )])
-    return InlineKeyboardMarkup(inline_keyboard=rows or [
-        [InlineKeyboardButton(text="Профилей пока нет", callback_data="noop")]
-    ])
+    if not rows:
+        rows.append([InlineKeyboardButton(
+            text="Профилей пока нет", callback_data="noop",
+        )])
+    rows.append([InlineKeyboardButton(
+        text="➕ Добавить профиль", callback_data="new:choose",
+    )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def profile_actions(profile_id: int) -> InlineKeyboardMarkup:
@@ -125,26 +146,40 @@ def confirm_delete_happ(profile_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-def users_list_kb(
-    users: list[BotUser],
-    env_admins: list[int],
-    main_admin_id: int | None,
-) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for aid in env_admins:
-        crown = "👑 " if aid == main_admin_id else ""
-        rows.append([InlineKeyboardButton(
-            text=f"{crown}🛡 {aid} · .env",
-            callback_data="usr:noop",
+@dataclass(slots=True)
+class UserListRow:
+    telegram_id: int
+    title: str
+    kind: str  # env | db
+    enabled: bool = True
+    is_main: bool = False
+
+
+def _btn_text(text: str) -> str:
+    return text if len(text) <= 64 else text[:61] + "..."
+
+
+def users_list_kb(rows: list[UserListRow]) -> InlineKeyboardMarkup:
+    buttons: list[list[InlineKeyboardButton]] = []
+    for row in rows:
+        if row.kind == "env":
+            mark = "👑" if row.is_main else "🛡"
+            cb = f"usr:env:{row.telegram_id}"
+        else:
+            mark = "✅" if row.enabled else "⏸"
+            cb = f"usr:show:{row.telegram_id}"
+        buttons.append([InlineKeyboardButton(
+            text=_btn_text(f"{mark} {row.title}"),
+            callback_data=cb,
         )])
-    for u in users:
-        mark = "✅" if u.enabled else "⏸"
-        rows.append([InlineKeyboardButton(
-            text=f"{mark} {u.label} · {u.telegram_id}",
-            callback_data=f"usr:show:{u.telegram_id}",
-        )])
-    rows.append([InlineKeyboardButton(text="➕ Добавить", callback_data="usr:add")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    buttons.append([InlineKeyboardButton(text="➕ Добавить", callback_data="usr:add")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def back_to_users_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="« К списку", callback_data="usr:list")],
+    ])
 
 
 def user_actions_kb(telegram_id: int, enabled: bool) -> InlineKeyboardMarkup:

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.db import Database
@@ -19,8 +20,9 @@ ONLINE_THRESHOLD_SEC = 180  # peer считается онлайн, если han
 @router.message(Command("stats"))
 @router.message(F.text == BTN_STATS)
 async def cmd_stats(
-    message: Message, db: Database, awg: AwgService, xui: XuiService,
+    message: Message, state: FSMContext, db: Database, awg: AwgService, xui: XuiService,
 ) -> None:
+    await state.clear()
     own_profiles = {
         p.public_key: p
         for p in await db.list_profiles(created_by=message.from_user.id)
