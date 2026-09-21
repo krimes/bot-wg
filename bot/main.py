@@ -11,8 +11,9 @@ from aiogram.enums import ParseMode
 from bot.config import get_settings
 from bot.db import Database
 from bot.handlers import router as root_router
-from bot.middlewares.auth import AdminOnlyMiddleware
+from bot.middlewares.auth import AccessMiddleware
 from bot.services.awg import AwgService
+from bot.services.xui import XuiService
 
 
 def _setup_logging() -> None:
@@ -36,6 +37,7 @@ async def main() -> None:
     await db.init()
 
     awg = AwgService(settings)
+    xui = XuiService(settings)
 
     # Бэкфилл: убеждаемся, что все профили из БД присутствуют в clientsTable.
     # Это нужно при первом запуске после апгрейда или если файл GUI был очищен.
@@ -56,21 +58,32 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
-    auth = AdminOnlyMiddleware(settings.admin_ids)
+    auth = AccessMiddleware(settings, db)
     dp.message.middleware(auth)
     dp.callback_query.middleware(auth)
 
     # Прокидываем зависимости в handler'ы через workflow_data
     dp["db"] = db
     dp["awg"] = awg
+    dp["xui"] = xui
     dp["settings"] = settings
 
     dp.include_router(root_router)
 
-    log.info("Bot started. admins=%s container=%s iface=%s",
-             settings.admin_ids, settings.awg_container, settings.awg_interface)
+    log.info(
+        "Bot started. admins=%s main_admin=%s container=%s iface=%s xui=%s inbound=%s",
+        settings.admin_ids,
+        settings.resolved_main_admin_id(),
+        settings.awg_container,
+        settings.awg_interface,
+        bool(settings.xui_host),
+        settings.xui_inbound_id,
+    )
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    try:
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    finally:
+        await xui.aclose()
 
 
 if __name__ == "__main__":

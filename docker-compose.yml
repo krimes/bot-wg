@@ -4,6 +4,9 @@ services:
     container_name: awg-bot
     restart: unless-stopped
     env_file: .env
+    extra_hosts:
+      # Чтобы XUI_HOST=http://host.docker.internal:2053 достучался до панели на хосте
+      - "host.docker.internal:host-gateway"
     volumes:
       # Чтобы бот мог обращаться к контейнеру AmneziaWG через docker exec
       - /var/run/docker.sock:/var/run/docker.sock

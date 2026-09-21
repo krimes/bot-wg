@@ -2,11 +2,15 @@
 
 Все операции выполняются через ``docker exec`` в контейнер ``AWG_CONTAINER``.
 Используем awg-utils (форк wg-tools от Amnezia): команды ``awg``, ``awg-quick``.
+Клиентский .conf собирается под AmneziaWG 3.1: файл wg0.conf + ``awg showconf``,
+чтобы не потерять I1–I5 и HeaderProtectionKey, которые старый showconf не пишет.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import ipaddress
 import json
 import logging
@@ -14,8 +18,7 @@ import re
 import shlex
 from dataclasses import dataclass
 from datetime import datetime, timezone
-
-from bot.config import Settings
+from typing import Protocol
 
 log = logging.getLogger(__name__)
 
@@ -47,19 +50,49 @@ class PeerStats:
 
 
 # Стандартные ключи секции [Interface] обычного WireGuard / wg-quick.
-# Всё, что присутствует в [Interface] и НЕ входит в этот набор, считаем
-# параметрами обфускации AmneziaWG (Jc/Jmin/Jmax/S1..S4/H1..H4/I1..I5/J1..J3/Itime
-# и любые будущие) и переносим в клиентский конфиг.
-# Это устойчиво к новым версиям AWG: добавлять код при появлении нового
-# параметра не нужно.
+# Всё остальное считаем параметрами AmneziaWG и (после фильтра) отдаём клиенту.
 STANDARD_WG_INTERFACE_KEYS = frozenset({
     "PrivateKey", "ListenPort", "FwMark", "Address", "DNS", "MTU",
     "Table", "PreUp", "PostUp", "PreDown", "PostDown", "SaveConfig",
 })
 
+# Убраны в amneziawg-tools 3.1 — клиент 3.1 отвергает эти строки.
+DROPPED_LEGACY_KEYS = frozenset({"J1", "J2", "J3", "Itime"})
+
+# Порядок как в официальном 3.1 .conf (Amnezia / 3X-UI). Неизвестные ключи
+# дописываются в конце, чтобы будущие параметры не терялись.
+AWG_OBFUSCATION_ORDER = (
+    "Jc", "Jmin", "Jmax",
+    "S1", "S2", "S3", "S4",
+    "H1", "H2", "H3", "H4",
+    "I1", "I2", "I3", "I4", "I5",
+    "HeaderProtectionKey",
+    "ContentPaddingAddition",
+    "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime",
+    "KeepaliveTimeout", "MaxHandshakeAttempts",
+    "RandomTrailers", "DisableCookies",
+)
+
+AWG_BOOL_KEYS = frozenset({"RandomTrailers", "DisableCookies"})
+AWG_KEY_FIELDS = frozenset({"HeaderProtectionKey"})
+
+
+class AwgSettings(Protocol):
+    awg_container: str
+    awg_interface: str
+    awg_config_path: str
+    awg_clients_table_path: str
+    awg_endpoint_host: str
+    awg_endpoint_port: int | None
+    awg_client_subnet: object
+    awg_client_dns: list[str]
+    awg_client_allowed_ips: list[str]
+    awg_client_keepalive: int
+    awg_client_mtu: int
+
 
 class AwgService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: AwgSettings) -> None:
         self._s = settings
 
     # ---------- docker exec ----------
@@ -111,18 +144,20 @@ class AwgService:
         )
 
     async def server_interface(self) -> ServerInterface:
-        # Источник истины — running config интерфейса. В файле wg0.conf,
-        # который кладёт Amnezia, могут отсутствовать новые параметры
-        # обфускации (I1, S3, S4, Itime ...) — контейнер досыпает их в
-        # рантайм через `awg set`/`syncconf` при старте.
-        # `awg showconf` всегда показывает то, чем интерфейс реально пользуется.
+        # 3.1-ключи часто лежат в файле wg0.conf, а старый `awg showconf` их
+        # не сериализует. Наоборот, runtime может досыпать S/H, которых нет
+        # в файле. Берём объединение: файл как база, showconf перекрывает.
+        file_if = extract_section(await self.read_server_config(), "Interface") or {}
+        show_if: dict[str, str] | None = None
         try:
-            conf = await self._exec("awg", "showconf", self._s.awg_interface)
+            show_if = extract_section(
+                await self._exec("awg", "showconf", self._s.awg_interface),
+                "Interface",
+            )
         except AwgError as exc:
-            log.warning("awg showconf не сработал (%s), читаю файл-конфиг", exc)
-            conf = await self.read_server_config()
-        interface = _extract_section(conf, "Interface")
-        if interface is None:
+            log.warning("awg showconf не сработал (%s), беру только файл-конфиг", exc)
+        interface = merge_interface(file_if, show_if)
+        if not interface:
             raise AwgError("В серверном конфиге нет секции [Interface]")
 
         priv = interface.get("PrivateKey")
@@ -134,13 +169,7 @@ class AwgService:
         if not port_str:
             raise AwgError("В [Interface] нет ListenPort")
 
-        # Всё, что не входит в стандартный WireGuard-набор, считаем AWG-обфускацией.
-        # dict сохраняет порядок вставки, а _extract_section идёт по строкам сверху
-        # вниз — значит порядок в клиентском конфиге совпадёт с серверным.
-        obfuscation = {
-            k: v for k, v in interface.items()
-            if k not in STANDARD_WG_INTERFACE_KEYS
-        }
+        obfuscation = collect_obfuscation(interface)
         if obfuscation:
             log.debug("AWG obfuscation params: %s", ", ".join(obfuscation))
         return ServerInterface(
@@ -304,38 +333,29 @@ class AwgService:
     ) -> str:
         s = self._s
         port = s.awg_endpoint_port or server.listen_port
-        lines = [
-            "[Interface]",
-            f"PrivateKey = {private_key}",
-            f"Address = {address}",
-            f"DNS = {', '.join(s.awg_client_dns)}",
-        ]
-        # Все параметры обфускации AmneziaWG, какие есть у сервера, обязаны
-        # попасть к клиенту — порядок сохраняем как у сервера (см. server_interface).
-        for k, v in server.obfuscation.items():
-            lines.append(f"{k} = {v}")
-        lines += [
-            "",
-            "[Peer]",
-            f"PublicKey = {server.public_key}",
-            f"PresharedKey = {preshared_key}",
-            f"AllowedIPs = {', '.join(s.awg_client_allowed_ips)}",
-            f"Endpoint = {s.awg_endpoint_host}:{port}",
-        ]
-        if s.awg_client_keepalive > 0:
-            lines.append(f"PersistentKeepalive = {s.awg_client_keepalive}")
-        return "\n".join(lines) + "\n"
+        return render_client_config(
+            private_key=private_key,
+            address=address,
+            dns=s.awg_client_dns,
+            mtu=s.awg_client_mtu,
+            obfuscation=server.obfuscation,
+            server_public_key=server.public_key,
+            preshared_key=preshared_key,
+            allowed_ips=s.awg_client_allowed_ips,
+            endpoint=f"{s.awg_endpoint_host}:{port}",
+            keepalive=s.awg_client_keepalive,
+        )
 
 
 # ============================================================
-# Парсинг wg-quick конфига
+# Парсинг wg-quick конфига / сборка клиентского 3.1 .conf
 # ============================================================
 
 _SECTION_RE = re.compile(r"^\[(?P<name>\w+)\]\s*$")
 
 
-def _extract_section(conf: str, name: str) -> dict[str, str] | None:
-    """Возвращает первую секцию [name] как dict (порядок ключей не сохраняется)."""
+def extract_section(conf: str, name: str) -> dict[str, str] | None:
+    """Первая секция [name] как dict с порядком ключей как в файле."""
     result: dict[str, str] | None = None
     in_section = False
     for raw in conf.splitlines():
@@ -354,6 +374,93 @@ def _extract_section(conf: str, name: str) -> dict[str, str] | None:
             k, _, v = line.partition("=")
             result[k.strip()] = v.strip()
     return result
+
+
+def merge_interface(
+    file_if: dict[str, str] | None,
+    show_if: dict[str, str] | None,
+) -> dict[str, str]:
+    """Файл как база (I1–I5, 3.1-ключи), showconf перекрывает непустым runtime."""
+    merged = dict(file_if or {})
+    for key, value in (show_if or {}).items():
+        if value != "":
+            merged[key] = value
+    return merged
+
+
+def collect_obfuscation(interface: dict[str, str]) -> dict[str, str]:
+    """Параметры AmneziaWG 3.1 для клиентского [Interface], в каноническом порядке."""
+    raw: dict[str, str] = {}
+    for key, value in interface.items():
+        if key in STANDARD_WG_INTERFACE_KEYS or key in DROPPED_LEGACY_KEYS:
+            continue
+        raw[key] = _normalize_awg_value(key, value)
+    ordered: dict[str, str] = {}
+    for key in AWG_OBFUSCATION_ORDER:
+        if key in raw:
+            ordered[key] = raw.pop(key)
+    ordered.update(raw)
+    return ordered
+
+
+def render_client_config(
+    *,
+    private_key: str,
+    address: str,
+    dns: list[str],
+    mtu: int,
+    obfuscation: dict[str, str],
+    server_public_key: str,
+    preshared_key: str,
+    allowed_ips: list[str],
+    endpoint: str,
+    keepalive: int,
+) -> str:
+    lines = [
+        "[Interface]",
+        f"PrivateKey = {private_key}",
+        f"Address = {address}",
+        f"DNS = {', '.join(dns)}",
+    ]
+    if mtu > 0:
+        lines.append(f"MTU = {mtu}")
+    for key, value in obfuscation.items():
+        lines.append(f"{key} = {value}")
+    lines += [
+        "",
+        "[Peer]",
+        f"PublicKey = {server_public_key}",
+        f"PresharedKey = {preshared_key}",
+        f"AllowedIPs = {', '.join(allowed_ips)}",
+        f"Endpoint = {endpoint}",
+    ]
+    if keepalive > 0:
+        lines.append(f"PersistentKeepalive = {keepalive}")
+    return "\n".join(lines) + "\n"
+
+
+def _normalize_awg_value(key: str, value: str) -> str:
+    if key in AWG_BOOL_KEYS:
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return "on"
+        if lowered in {"0", "false", "no", "off"}:
+            return "off"
+        return value
+    if key in AWG_KEY_FIELDS:
+        return _key_to_conf_base64(value)
+    return value
+
+
+def _key_to_conf_base64(value: str) -> str:
+    """showconf/UAPI иногда отдают HeaderProtectionKey hex-ом — клиенту нужен base64."""
+    raw = value.strip()
+    if len(raw) == 64:
+        try:
+            return base64.b64encode(binascii.unhexlify(raw)).decode()
+        except binascii.Error:
+            return raw
+    return raw
 
 
 def _remove_peer_block(conf: str, public_key: str) -> str:

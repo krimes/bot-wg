@@ -5,7 +5,7 @@ from aiogram.filters import BaseFilter, Command, CommandStart
 from aiogram.types import Message
 
 from bot.config import Settings
-from bot.keyboards import link_kb, main_menu
+from bot.keyboards import BTN_HELP, link_kb, reply_menu
 
 router = Router(name="common")
 
@@ -19,38 +19,45 @@ class LinkButtonFilter(BaseFilter):
         return bool(settings.link_url) and message.text == settings.link_button_text
 
 
-def _help_text(settings: Settings) -> str:
+def _help_text(settings: Settings, user_id: int) -> str:
     lines = [
-        "🛡 <b>AmneziaWG Manager</b>\n",
+        "🛡 <b>AmneziaWG + Happ</b>\n",
         "Команды:",
-        "• /new <code>имя</code> — создать новый профиль",
+        "• /new <code>имя</code> — создать профиль AmneziaWG",
+        "• /happ <code>имя</code> — создать клиента Happ (VLESS)",
         "• /list — список профилей",
         "• /stats — статистика подключений",
     ]
     if settings.link_url:
         lines.append("• /link — полезная ссылка")
+    if settings.is_main_admin(user_id):
+        lines += [
+            "",
+            "<b>Главный админ</b>",
+            "• /users — пользователи бота",
+            "• /useradd <code>id</code> — добавить пользователя",
+            "• /broadcast — глобальная рассылка",
+        ]
     lines += ["• /help — это сообщение", "", "Также доступны кнопки меню."]
     return "\n".join(lines)
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, settings: Settings) -> None:
+    uid = message.from_user.id
     await message.answer(
-        _help_text(settings),
-        reply_markup=main_menu(
-            link_button_text=settings.link_button_text if settings.link_url else None,
-        ),
+        _help_text(settings, uid),
+        reply_markup=reply_menu(settings, uid),
     )
 
 
 @router.message(Command("help"))
-@router.message(F.text == "ℹ️ Помощь")
+@router.message(F.text == BTN_HELP)
 async def cmd_help(message: Message, settings: Settings) -> None:
+    uid = message.from_user.id
     await message.answer(
-        _help_text(settings),
-        reply_markup=main_menu(
-            link_button_text=settings.link_button_text if settings.link_url else None,
-        ),
+        _help_text(settings, uid),
+        reply_markup=reply_menu(settings, uid),
     )
 
 

@@ -25,6 +25,8 @@ class Settings(BaseSettings):
 
     bot_token: str = Field(alias="BOT_TOKEN")
     admin_ids: CSVIntList = Field(alias="ADMIN_IDS", default_factory=list)
+    # Если пусто — главный админ = первый ID в ADMIN_IDS.
+    main_admin_id: int | None = Field(alias="MAIN_ADMIN_ID", default=None)
 
     awg_container: str = Field(alias="AWG_CONTAINER", default="amnezia-awg")
     awg_interface: str = Field(alias="AWG_INTERFACE", default="wg0")
@@ -52,6 +54,9 @@ class Settings(BaseSettings):
         default_factory=lambda: ["0.0.0.0/0", "::/0"],
     )
     awg_client_keepalive: int = Field(alias="AWG_CLIENT_KEEPALIVE", default=25)
+    # 1280 — рекомендация AmneziaWG 3.1 (S4 и RandomTrailers иначе фрагментируют).
+    # 0 — не писать MTU в клиентский .conf.
+    awg_client_mtu: int = Field(alias="AWG_CLIENT_MTU", default=1280)
 
     db_path: Path = Field(alias="DB_PATH", default=Path("awg-bot.db"))
 
@@ -60,6 +65,18 @@ class Settings(BaseSettings):
     link_url: str | None = Field(alias="LINK_URL", default=None)
     link_button_text: str = Field(alias="LINK_BUTTON_TEXT", default="🔗 Ссылка")
 
+    # --- 3X-UI / Happ ---
+    # Если XUI_HOST пуст — кнопки Happ отвечают «панель не настроена», WG не трогаем.
+    xui_host: str | None = Field(alias="XUI_HOST", default=None)
+    xui_web_base_path: str = Field(alias="XUI_WEB_BASE_PATH", default="")
+    xui_username: str | None = Field(alias="XUI_USERNAME", default=None)
+    xui_password: str | None = Field(alias="XUI_PASSWORD", default=None)
+    xui_api_token: str | None = Field(alias="XUI_API_TOKEN", default=None)
+    xui_inbound_id: int | None = Field(alias="XUI_INBOUND_ID", default=None)
+    xui_client_host: str | None = Field(alias="XUI_CLIENT_HOST", default=None)
+    xui_sub_base: str | None = Field(alias="XUI_SUB_BASE", default=None)
+    xui_tls_verify: bool = Field(alias="XUI_TLS_VERIFY", default=True)
+
     @field_validator("admin_ids", "awg_client_dns", "awg_client_allowed_ips", mode="before")
     @classmethod
     def _split_csv(cls, v):
@@ -67,12 +84,32 @@ class Settings(BaseSettings):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
-    @field_validator("awg_endpoint_port", "link_url", mode="before")
+    @field_validator(
+        "awg_endpoint_port",
+        "link_url",
+        "xui_host",
+        "xui_username",
+        "xui_password",
+        "xui_api_token",
+        "xui_inbound_id",
+        "xui_client_host",
+        "xui_sub_base",
+        "main_admin_id",
+        mode="before",
+    )
     @classmethod
     def _empty_str_to_none(cls, v):
         if isinstance(v, str) and not v.strip():
             return None
         return v
+
+    def is_main_admin(self, user_id: int) -> bool:
+        from bot.access import is_main_admin as _is_main
+        return _is_main(user_id, self.admin_ids, self.main_admin_id)
+
+    def resolved_main_admin_id(self) -> int | None:
+        from bot.access import resolve_main_admin_id
+        return resolve_main_admin_id(self.admin_ids, self.main_admin_id)
 
 
 @lru_cache

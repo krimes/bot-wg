@@ -1,20 +1,23 @@
 # AmneziaWG Telegram Bot
 
-Telegram-бот для управления профилями self-hosted **AmneziaWG**.
+Telegram-бот для управления профилями self-hosted **AmneziaWG** и клиентами
+**Happ** (VLESS через панель 3X-UI).
 Бот живёт на том же сервере, где развёрнут AmneziaWG (в Docker-контейнере),
-и общается с ним через `docker exec`. Доступ — только для администраторов,
-указанных по telegram-id.
+и общается с ним через `docker exec`. Клиентов Happ создаёт через REST API 3X-UI.
+Доступ — только для администраторов, указанных по telegram-id.
 
 ## Возможности
 
-- ➕ создать профиль: генерация ключей, выделение IP, добавление peer,
+- ➕ создать профиль WG: генерация ключей, выделение IP, добавление peer,
   выдача `.conf` и QR-кода прямо в чат
-- 📋 список профилей с карточкой (адрес, дата создания, автор)
-- 🗑 удалить профиль (`awg set ... peer ... remove` + правка конфига)
-- 📊 статистика по интерфейсу: онлайн/офлайн, трафик, последний handshake
+- ➕ создать клиента Happ: UUID в inbound 3X-UI, `vless://` + QR для приложения Happ
+- 📋 общий список профилей (WG и Happ) с карточкой
+- 🗑 удалить профиль (peer из AmneziaWG или клиент с панели 3X-UI)
+- 📊 статистика WG по `awg show` и трафик Happ из 3X-UI
 - 🔒 авторизация по `ADMIN_IDS` через middleware
-- 🐳 параметры обфускации (`Jc/Jmin/Jmax/S1/S2/H1..H4`) автоматически
-  переносятся в клиентский конфиг — это то, что делает AmneziaWG отличным от ванильного WireGuard
+- 🐳 параметры AmneziaWG **3.1** (`Jc/Jmin/Jmax`, `S1–S4`, `H1–H4`, `I1–I5`,
+  `HeaderProtectionKey`, `ContentPaddingAddition`, таймеры, `RandomTrailers`,
+  `DisableCookies`) копируются в клиентский `.conf`; MTU по умолчанию 1280
 
 ## Требования
 
@@ -49,7 +52,8 @@ sudo journalctl -u awg-bot -f
 | Переменная | Описание |
 |------------|----------|
 | `BOT_TOKEN` | токен из @BotFather |
-| `ADMIN_IDS` | список telegram-id через запятую |
+| `ADMIN_IDS` | список telegram-id через запятую (всегда имеют доступ) |
+| `MAIN_ADMIN_ID` | главный админ: пользователи + рассылка. Пусто = первый `ADMIN_IDS` |
 | `AWG_CONTAINER` | имя docker-контейнера с AmneziaWG |
 | `AWG_INTERFACE` | имя wg-интерфейса внутри контейнера (по умолчанию `wg0`) |
 | `AWG_CONFIG_PATH` | путь к конфигу внутри контейнера |
@@ -59,18 +63,82 @@ sudo journalctl -u awg-bot -f
 | `AWG_CLIENT_DNS` | DNS-серверы клиента |
 | `AWG_CLIENT_ALLOWED_IPS` | `AllowedIPs` клиента (по умолчанию весь трафик) |
 | `AWG_CLIENT_KEEPALIVE` | PersistentKeepalive (`0` чтобы отключить) |
+| `AWG_CLIENT_MTU` | MTU в клиентском `.conf` (по умолчанию `1280` для AWG 3.1; `0` — не писать) |
 | `DB_PATH` | путь к SQLite-файлу с метаданными |
 | `LINK_URL` | (опц.) URL, который покажет кнопка в главном меню |
 | `LINK_BUTTON_TEXT` | (опц.) текст кнопки-ссылки, по умолчанию `🔗 Ссылка` |
+| `XUI_HOST` | URL панели 3X-UI (`http://host.docker.internal:2053`). Пусто — Happ выключен |
+| `XUI_WEB_BASE_PATH` | секретный путь панели, если задан |
+| `XUI_API_TOKEN` | API-токен панели (предпочтительнее логина) |
+| `XUI_USERNAME` / `XUI_PASSWORD` | логин панели, если токена нет |
+| `XUI_INBOUND_ID` | ID inbound VLESS+Reality, в который бот добавляет клиентов |
+| `XUI_CLIENT_HOST` | публичный хост в `vless://`; пусто — `AWG_ENDPOINT_HOST` |
+| `XUI_SUB_BASE` | (опц.) база подписки, например `https://ip:2096/sub` |
+| `XUI_TLS_VERIFY` | проверка TLS сертификата панели, по умолчанию `true` |
+
+## AmneziaWG 3.1
+
+Клиентский `.conf` собирается под стандарт 3.1:
+
+- обфускация берётся из **файла** `wg0.conf` **и** `awg showconf` (union:
+  runtime перекрывает, файл добирает `I1–I5` / `HeaderProtectionKey`, которые
+  старый `showconf` часто не печатает);
+- в конфиг попадают `HeaderProtectionKey`, `ContentPaddingAddition`, таймеры,
+  `RandomTrailers`, `DisableCookies`; флаги пишутся как `on`/`off`;
+- устаревшие `J1`/`J2`/`J3`/`Itime` отбрасываются — клиент 3.1 их отвергает;
+- `HeaderProtectionKey` в hex (UAPI) переводится в base64;
+- MTU по умолчанию **1280**.
+
+Сервер и приложение-клиент тоже должны быть 3.1: `HeaderProtectionKey` и
+`RandomTrailers` обязаны совпадать на обеих сторонах. Если на сервере этих
+ключей нет, бот их не выдумает — конфиг останется 2.0-совместимым.
+
+## Пользователи и рассылка
+
+Доступ к боту:
+
+- все `ADMIN_IDS` из `.env` (нельзя выключить из чата);
+- пользователи в таблице `bot_users`, которых добавил **главный админ**.
+
+Главный админ — `MAIN_ADMIN_ID`, иначе первый `ADMIN_IDS`. У него в меню
+отдельная секция **👥 Пользователи** и **📣 Рассылка**.
+
+- добавить: кнопка «Добавить», переслать сообщение человека или
+  `/useradd 123456789 Имя`;
+- выключить / удалить — только записи из базы;
+- рассылка копирует любое сообщение (текст, фото, файл) всем, у кого есть
+  доступ, кроме отправителя. Человек должен хотя бы раз нажать /start у бота.
+
+У каждого свой список профилей WG/Happ, как и раньше.
+
+## Happ / 3X-UI
+
+Бот **не ставит** панель. На сервере уже должен быть 3X-UI с inbound
+**VLESS + Reality** (обычно порт 443, flow `xtls-rprx-vision`).
+
+1. В панели: **Inbounds** — запомните ID нужного inbound.
+2. **Settings → Security → API Token** — создайте токен (или используйте логин).
+3. В `.env` бота заполните `XUI_HOST`, `XUI_INBOUND_ID`, токен или логин,
+   `XUI_CLIENT_HOST` (публичный IP/домен сервера).
+4. Если бот в Docker, а панель на хосте:
+   `XUI_HOST=http://host.docker.internal:ПОРТ_ПАНЕЛИ`
+5. `/happ phone` или кнопка **➕ Новый Happ** — в чат придут `vless://` и QR.
+   В Happ: **+ → импорт из буфера / QR**.
+
+WG и Happ независимы: пустой `XUI_HOST` не ломает AmneziaWG.
 
 ## Команды бота
 
 | Команда | Действие |
 |---------|----------|
 | `/start`, `/help` | приветствие, главное меню |
-| `/new <имя>` | создать новый профиль (имя: `[A-Za-z0-9_-]{2,32}`) |
-| `/list` | список профилей |
-| `/stats` | статистика по `awg show <iface> dump` |
+| `/new <имя>` | создать профиль AmneziaWG (имя: `[A-Za-z0-9_-]{2,32}`) |
+| `/happ <имя>` | создать клиента Happ в 3X-UI |
+| `/list` | список профилей WG и Happ |
+| `/stats` | статистика WG и трафик Happ |
+| `/users` | *(главный админ)* список пользователей бота |
+| `/useradd <id>` | *(главный админ)* добавить пользователя по Telegram ID |
+| `/broadcast` | *(главный админ)* рассылка всем, у кого есть доступ |
 
 В меню те же действия доступны кнопками.
 
@@ -83,8 +151,10 @@ bot/
 ├── db.py                # aiosqlite-обёртка
 ├── keyboards.py         # inline + reply клавиатуры
 ├── middlewares/auth.py  # доступ по ADMIN_IDS
-├── handlers/            # common, profiles, stats
-└── services/awg.py      # docker exec + парсинг wg-quick конфига
+├── handlers/            # common, profiles, happ, stats
+└── services/
+    ├── awg.py           # docker exec + парсинг wg-quick конфига
+    └── xui.py           # REST 3X-UI, сборка vless:// для Happ
 scripts/
 ├── install.sh           # установка в /opt/awg-bot + systemd
 └── awg-bot.service      # systemd unit

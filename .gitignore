@@ -1,4 +1,5 @@
 .env
+.pytest_cache/
 *.db
 *.db-journal
 __pycache__/

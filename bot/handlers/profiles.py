@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import io
 import logging
 import re
 from datetime import datetime, timezone
 
-import qrcode
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
@@ -18,7 +16,15 @@ from aiogram.types import (
 
 from bot.config import Settings
 from bot.db import Database, Profile
-from bot.keyboards import confirm_delete, main_menu, profile_actions, profiles_list
+from bot.keyboards import (
+    BTN_LIST,
+    BTN_NEW_WG,
+    confirm_delete,
+    profile_actions,
+    profiles_list,
+    reply_menu,
+)
+from bot.qrutil import qr_png
 from bot.services.awg import AwgError, AwgService
 
 log = logging.getLogger(__name__)
@@ -37,26 +43,35 @@ class NewProfileSG(StatesGroup):
 
 
 @router.message(Command("list"))
-@router.message(F.text == "📋 Список")
+@router.message(F.text == BTN_LIST)
 async def cmd_list(message: Message, db: Database) -> None:
-    profiles = await db.list_profiles(created_by=message.from_user.id)
-    if not profiles:
-        await message.answer("У вас пока нет профилей. Создайте через /new или кнопку.")
+    wg = await db.list_profiles(created_by=message.from_user.id)
+    happ = await db.list_happ_profiles(created_by=message.from_user.id)
+    if not wg and not happ:
+        await message.answer("У вас пока нет профилей. Создайте через /new, /happ или кнопки.")
         return
     await message.answer(
-        f"Ваших профилей: <b>{len(profiles)}</b>\nВыберите для управления:",
-        reply_markup=profiles_list(profiles),
+        _list_header(len(wg), len(happ)),
+        reply_markup=profiles_list(wg, happ),
     )
 
 
 @router.callback_query(F.data == "prof:back")
 async def cb_back(call: CallbackQuery, db: Database) -> None:
-    profiles = await db.list_profiles(created_by=call.from_user.id)
+    wg = await db.list_profiles(created_by=call.from_user.id)
+    happ = await db.list_happ_profiles(created_by=call.from_user.id)
     await call.message.edit_text(
-        f"Ваших профилей: <b>{len(profiles)}</b>\nВыберите для управления:",
-        reply_markup=profiles_list(profiles),
+        _list_header(len(wg), len(happ)),
+        reply_markup=profiles_list(wg, happ),
     )
     await call.answer()
+
+
+def _list_header(wg_n: int, happ_n: int) -> str:
+    return (
+        f"Ваших профилей: <b>{wg_n + happ_n}</b> "
+        f"(WG {wg_n} · Happ {happ_n})\nВыберите для управления:"
+    )
 
 
 @router.callback_query(F.data.startswith("prof:show:"))
@@ -91,7 +106,7 @@ async def cmd_new(
     await _create(message, name, db, awg, settings)
 
 
-@router.message(F.text == "➕ Новый профиль")
+@router.message(F.text == BTN_NEW_WG)
 async def btn_new(message: Message, state: FSMContext) -> None:
     await state.set_state(NewProfileSG.waiting_name)
     await message.answer(
@@ -167,9 +182,7 @@ async def _create(
     await _send_config_and_qr(message, profile, client_conf)
     await message.answer(
         "Готово.",
-        reply_markup=main_menu(
-            link_button_text=settings.link_button_text if settings.link_url else None,
-        ),
+        reply_markup=reply_menu(settings, message.from_user.id),
     )
 
 
@@ -219,7 +232,7 @@ async def cb_qr(call: CallbackQuery, db: Database, awg: AwgService) -> None:
         preshared_key=profile.preshared_key,
         address=profile.address,
     )
-    png = _qr_png(conf)
+    png = qr_png(conf)
     await call.message.answer_photo(
         BufferedInputFile(png, filename=f"{profile.name}.png"),
         caption=f"QR для <b>{profile.name}</b>",
@@ -311,13 +324,6 @@ async def _send_config_and_qr(message: Message, profile: Profile, conf: str) -> 
         caption="📄 Сохраните этот .conf",
     )
     await message.answer_photo(
-        BufferedInputFile(_qr_png(conf), filename=f"{profile.name}.png"),
+        BufferedInputFile(qr_png(conf), filename=f"{profile.name}.png"),
         caption="📱 Отсканируйте QR в AmneziaWG-клиенте",
     )
-
-
-def _qr_png(payload: str) -> bytes:
-    img = qrcode.make(payload, box_size=8, border=2)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
