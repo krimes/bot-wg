@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Выдать WG — AmneziaWG</title>
+  <style>
+    :root {
+      --bg: #12160f; --card: #1c2318; --ink: #f3efe4; --mute: #9aa58c;
+      --line: #2d3828; --gold: #d4a017; --gold-ink: #1a1404; --err: #e05c4a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      background:
+        radial-gradient(1200px 500px at 90% -20%, #2a331f 0%, transparent 45%),
+        var(--bg);
+      color: var(--ink); padding: 32px 16px 48px;
+    }
+    main { width: min(640px, 100%); margin: 0 auto; }
+    header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 28px; }
+    h1 { font-size: 1.45rem; margin: 0; }
+    a.out { color: var(--mute); font-size: .9rem; }
+    form {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 18px; padding: 28px;
+    }
+    p.lead { color: var(--mute); margin: 0 0 22px; }
+    label { display: block; font-size: .8rem; color: var(--mute); margin: 16px 0 8px; }
+    select, input {
+      width: 100%; padding: 12px 14px; border-radius: 10px;
+      border: 1px solid var(--line); background: #12160f; color: var(--ink);
+      font: inherit; font-size: 1rem;
+    }
+    option:disabled { color: #666; }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; margin: 8px 0 4px; }
+    th { text-align: left; color: var(--mute); font-weight: 500; padding: 6px 8px; }
+    td { padding: 8px; border-top: 1px solid var(--line); }
+    tr.taken td { opacity: .45; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+    button.gen {
+      margin-top: 24px; width: 100%; padding: 14px; border: 0; border-radius: 10px;
+      cursor: pointer; background: var(--gold); color: var(--gold-ink);
+      font: inherit; font-weight: 700; letter-spacing: .04em; font-size: 1.05rem;
+    }
+    .err {
+      background: #3a1d18; color: #ffc8c0; padding: 10px 12px;
+      border-radius: 8px; margin-bottom: 8px; font-size: .9rem;
+    }
+    .hint { color: var(--mute); font-size: .82rem; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Первый конфиг AmneziaWG</h1>
+      <a class="out" href="/logout">Выйти</a>
+    </header>
+    <form method="post" action="/generate">
+      <p class="lead">Выберите себя в списке — только люди, которых админ уже добавил в бота. Повторно скачать конфиг с этой страницы нельзя.</p>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+      <label>Допущенные пользователи</label>
+      <table>
+        <thead>
+          <tr><th></th><th>ФИ</th><th>Ник</th><th>Telegram ID</th></tr>
+        </thead>
+        <tbody>
+          {% for p in people %}
+          <tr class="{{ 'taken' if p.has_wg else '' }}">
+            <td>
+              <input type="radio" name="telegram_id" value="{{ p.telegram_id }}"
+                     {% if selected == p.telegram_id %}checked{% endif %}
+                     {% if p.has_wg %}disabled{% endif %}
+                     required>
+            </td>
+            <td>{{ p.fio }}{% if p.has_wg %} <span class="hint">уже выдан</span>{% endif %}</td>
+            <td>{{ p.username }}</td>
+            <td><code>{{ p.telegram_id }}</code></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if not people %}
+      <p class="hint">Список пуст. Админ должен добавить людей в бота.</p>
+      {% endif %}
+
+      <label for="name">Имя подключения</label>
+      <input id="name" name="name" type="text" required minlength="2" maxlength="32"
+             pattern="[A-Za-z0-9_-]{2,32}" placeholder="phone"
+             value="{{ name }}"
+             title="Латиница, цифры, _ или -, 2–32 символа">
+      <p class="hint">Так конфиг будет называться на устройстве, например phone или laptop.</p>
+
+      <button class="gen" type="submit" {% if not can_generate %}disabled{% endif %}>Сгенерировать</button>
+      {% if not can_generate %}
+      <p class="hint">Всем в списке конфиг уже выдавался. Новых через сайт получить нельзя.</p>
+      {% endif %}
+    </form>
+  </main>
+</body>
+</html>

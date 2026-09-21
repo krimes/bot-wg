@@ -79,10 +79,40 @@ async def main() -> None:
         bool(settings.xui_host),
         settings.xui_inbound_id,
     )
+
+    web_task: asyncio.Task | None = None
+    web_server = None
+    if settings.web_password:
+        import uvicorn
+
+        from bot.web.app import create_web_app
+
+        web_app = create_web_app(settings, db, awg)
+        web_config = uvicorn.Config(
+            web_app,
+            host=settings.web_host,
+            port=settings.web_port,
+            log_level="info",
+            lifespan="off",
+        )
+        web_server = uvicorn.Server(web_config)
+        web_task = asyncio.create_task(web_server.serve(), name="web-issue")
+        log.info("Web issue desk http://%s:%s", settings.web_host, settings.web_port)
+    else:
+        log.info("WEB_PASSWORD пуст — веб-выдача выключена")
+
     await bot.delete_webhook(drop_pending_updates=True)
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if web_server is not None:
+            web_server.should_exit = True
+        if web_task is not None:
+            web_task.cancel()
+            try:
+                await web_task
+            except asyncio.CancelledError:
+                pass
         await xui.aclose()
 
 

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Конфиг готов — AmneziaWG</title>
+  <style>
+    :root {
+      --bg: #12160f; --card: #1c2318; --ink: #f3efe4; --mute: #9aa58c;
+      --line: #2d3828; --gold: #d4a017; --gold-ink: #1a1404;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      background: var(--bg); color: var(--ink); padding: 32px 16px 48px;
+    }
+    main { width: min(640px, 100%); margin: 0 auto; }
+    h1 { font-size: 1.45rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 18px; padding: 28px;
+    }
+    .qr { display: block; margin: 12px auto 20px; width: 220px; height: 220px; background: #fff; padding: 10px; border-radius: 12px; }
+    a.dl {
+      display: block; text-align: center; padding: 13px; border-radius: 10px;
+      background: var(--gold); color: var(--gold-ink); font-weight: 700;
+      text-decoration: none; letter-spacing: .04em;
+    }
+    pre {
+      overflow: auto; background: #12160f; padding: 14px; border-radius: 10px;
+      font-size: .78rem; line-height: 1.4; border: 1px solid var(--line);
+    }
+    .mute { color: var(--mute); }
+    a.back { color: var(--mute); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Конфиг «{{ name }}» готов</h1>
+    <div class="card">
+      <p class="mute">Telegram ID <code>{{ telegram_id }}</code>. Сохраните файл или отсканируйте QR в AmneziaWG. Повторно с сайта получить нельзя.</p>
+      <img class="qr" alt="QR" src="data:image/png;base64,{{ qr_b64 }}">
+      <a class="dl" href="/download">Скачать {{ filename }}</a>
+      <p class="mute" style="margin-top:22px">Текст конфига</p>
+      <pre>{{ conf }}</pre>
+      <p><a class="back" href="/">К списку</a> · <a class="back" href="/logout">Выйти</a></p>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — AmneziaWG</title>
+  <style>
+    :root {
+      --bg: #12160f;
+      --card: #1c2318;
+      --ink: #f3efe4;
+      --mute: #9aa58c;
+      --line: #2d3828;
+      --gold: #d4a017;
+      --gold-ink: #1a1404;
+      --err: #e05c4a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #2a331f 0%, transparent 50%),
+        var(--bg);
+      color: var(--ink);
+      display: grid; place-items: center;
+      padding: 24px;
+    }
+    form {
+      width: min(420px, 100%);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 36px 32px 28px;
+    }
+    h1 { font-size: 1.4rem; font-weight: 600; margin: 0 0 6px; letter-spacing: .02em; }
+    p.lead { margin: 0 0 28px; color: var(--mute); font-size: .95rem; }
+    label { display: block; font-size: .8rem; color: var(--mute); margin-bottom: 8px; }
+    input {
+      width: 100%; padding: 12px 14px; border-radius: 10px;
+      border: 1px solid var(--line); background: #12160f; color: var(--ink);
+      font: inherit; font-size: 1rem;
+    }
+    input:focus { outline: 2px solid var(--gold); border-color: transparent; }
+    button {
+      margin-top: 20px; width: 100%; padding: 13px;
+      border: 0; border-radius: 10px; cursor: pointer;
+      background: var(--gold); color: var(--gold-ink);
+      font: inherit; font-weight: 700; letter-spacing: .04em;
+    }
+    .err {
+      background: #3a1d18; color: #ffc8c0; padding: 10px 12px;
+      border-radius: 8px; margin-bottom: 16px; font-size: .9rem;
+    }
+  </style>
+</head>
+<body>
+  <form method="post" action="/login" autocomplete="current-password">
+    <h1>Первичный доступ</h1>
+    <p class="lead">Пароль выдаёт администратор. Дальше выберите себя в списке и получите конфиг AmneziaWG.</p>
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <label for="password">Пароль</label>
+    <input id="password" name="password" type="password" required autofocus>
+    <button type="submit">Войти</button>
+  </form>
+</body>
+</html>

@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     xui_sub_base: str | None = Field(alias="XUI_SUB_BASE", default=None)
     xui_tls_verify: bool = Field(alias="XUI_TLS_VERIFY", default=True)
 
+    # Веб-выдача первого WG-конфига. Пустой WEB_PASSWORD — сайт не поднимается.
+    web_password: str | None = Field(alias="WEB_PASSWORD", default=None)
+    web_secret: str | None = Field(alias="WEB_SECRET", default=None)
+    web_host: str = Field(alias="WEB_HOST", default="0.0.0.0")
+    web_port: int = Field(alias="WEB_PORT", default=8080)
+
     @field_validator("admin_ids", "awg_client_dns", "awg_client_allowed_ips", mode="before")
     @classmethod
     def _split_csv(cls, v):
@@ -95,6 +101,8 @@ class Settings(BaseSettings):
         "xui_client_host",
         "xui_sub_base",
         "main_admin_id",
+        "web_password",
+        "web_secret",
         mode="before",
     )
     @classmethod

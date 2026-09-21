@@ -4,6 +4,8 @@ services:
     container_name: awg-bot
     restart: unless-stopped
     env_file: .env
+    ports:
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
     extra_hosts:
       # Чтобы XUI_HOST=http://host.docker.internal:2053 достучался до панели на хосте
       - "host.docker.internal:host-gateway"

@@ -3,6 +3,7 @@ from __future__ import annotations
 from bot.access import (
     format_person_label,
     is_main_admin,
+    listed_telegram_ids,
     merge_recipient_ids,
     resolve_main_admin_id,
 )
@@ -45,3 +46,7 @@ def test_format_person_label_falls_back():
     assert format_person_label(
         first_name=None, last_name=None, username=None, telegram_id=44,
     ) == "44"
+
+
+def test_listed_telegram_ids_env_then_db_without_dupes():
+    assert listed_telegram_ids([11, 22], [22, 33]) == [11, 22, 33]

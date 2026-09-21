@@ -29,6 +29,18 @@ def format_person_label(
     return " · ".join(parts) if parts else str(telegram_id)
 
 
+def listed_telegram_ids(admin_ids: list[int], db_user_ids: list[int]) -> list[int]:
+    """ADMIN_IDS, затем включённые пользователи БД без дублей."""
+    seen: set[int] = set()
+    out: list[int] = []
+    for uid in [*admin_ids, *db_user_ids]:
+        if uid in seen:
+            continue
+        seen.add(uid)
+        out.append(uid)
+    return out
+
+
 def merge_recipient_ids(
     *,
     env_admins: list[int],
