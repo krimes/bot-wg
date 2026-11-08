@@ -29,9 +29,10 @@ class Settings(BaseSettings):
     main_admin_id: int | None = Field(alias="MAIN_ADMIN_ID", default=None)
 
     awg_container: str = Field(alias="AWG_CONTAINER", default="amnezia-awg")
-    awg_interface: str = Field(alias="AWG_INTERFACE", default="wg0")
+    # Текущий образ Amnezia поднимает awg0 из awg0.conf, не wg0.
+    awg_interface: str = Field(alias="AWG_INTERFACE", default="awg0")
     awg_config_path: str = Field(
-        alias="AWG_CONFIG_PATH", default="/opt/amnezia/awg/wg0.conf"
+        alias="AWG_CONFIG_PATH", default="/opt/amnezia/awg/awg0.conf"
     )
     # Путь к clientsTable внутри контейнера — это JSON-список клиентов,
     # который читает GUI AmneziaVPN, чтобы показывать «подключённые устройства».

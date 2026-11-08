@@ -17,6 +17,7 @@ import logging
 import re
 import shlex
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -95,6 +96,17 @@ class AwgService:
     def __init__(self, settings: AwgSettings) -> None:
         self._s = settings
 
+    def interface_name(self) -> str:
+        """Имя интерфейса = имя файла конфига.
+
+        Образ Amnezia ``amnezia-awg2`` поднимает ``awg0`` из ``awg0.conf``.
+        ``awg set wg0`` в этом контейнере не находит сокет userspace и падает
+        с ``Protocol not supported``.
+        """
+        return interface_from_config_path(
+            self._s.awg_config_path, self._s.awg_interface,
+        )
+
     # ---------- docker exec ----------
 
     async def _exec(self, *argv: str, input_: str | None = None) -> str:
@@ -151,7 +163,7 @@ class AwgService:
         show_if: dict[str, str] | None = None
         try:
             show_if = extract_section(
-                await self._exec("awg", "showconf", self._s.awg_interface),
+                await self._exec("awg", "showconf", self.interface_name()),
                 "Interface",
             )
         except AwgError as exc:
@@ -198,36 +210,99 @@ class AwgService:
     async def add_peer(
         self, *, public_key: str, preshared_key: str, address: str
     ) -> None:
-        """Добавляет peer в running-конфиг и переписывает файл."""
-        # 1) рантайм
-        await self._exec(
-            "awg", "set", self._s.awg_interface,
-            "peer", public_key,
-            "preshared-key", "/dev/stdin",
-            "allowed-ips", address,
-            input_=preshared_key + "\n",
+        """Добавляет peer в running-конфиг и переписывает файл.
+
+        Ядро AmneziaWG принимает ``awg set``. Userspace ``amneziawg-go``
+        (образ amnezia-awg2 без модуля) отвечает ``Protocol not supported``:
+        тогда peer пишется в файл и интерфейс поднимается заново через
+        ``awg-quick``, как это делает start.sh контейнера.
+        """
+        iface = self.interface_name()
+        try:
+            await self._exec(
+                "awg", "set", iface,
+                "peer", public_key,
+                "preshared-key", "/dev/stdin",
+                "allowed-ips", address,
+                input_=preshared_key + "\n",
+            )
+        except AwgError as exc:
+            if not runtime_set_needs_reload(str(exc)):
+                raise
+            log.warning(
+                "awg set %s не применился (%s), перечитываю %s",
+                iface, exc, self._s.awg_config_path,
+            )
+            added = await self._ensure_peer_in_config(
+                public_key=public_key,
+                preshared_key=preshared_key,
+                address=address,
+            )
+            try:
+                await self._reload_interface()
+            except AwgError:
+                if added:
+                    await self._drop_peer_from_file(public_key)
+                raise
+            return
+        await self._ensure_peer_in_config(
+            public_key=public_key,
+            preshared_key=preshared_key,
+            address=address,
         )
-        # 2) персистентный конфиг — дописываем peer-блок в файл
-        block = (
-            f"\n[Peer]\n"
-            f"PublicKey = {public_key}\n"
-            f"PresharedKey = {preshared_key}\n"
-            f"AllowedIPs = {address}\n"
+
+    async def remove_peer(self, public_key: str) -> None:
+        iface = self.interface_name()
+        try:
+            await self._exec(
+                "awg", "set", iface, "peer", public_key, "remove",
+            )
+        except AwgError as exc:
+            if not runtime_set_needs_reload(str(exc)):
+                raise
+            log.warning(
+                "awg set %s remove не применился (%s), перечитываю конфиг",
+                iface, exc,
+            )
+            await self._drop_peer_from_file(public_key)
+            await self._reload_interface()
+            return
+        await self._drop_peer_from_file(public_key)
+
+    async def _ensure_peer_in_config(
+        self, *, public_key: str, preshared_key: str, address: str,
+    ) -> bool:
+        conf = await self.read_server_config()
+        if peer_in_config(conf, public_key):
+            return False
+        block = render_server_peer_block(
+            public_key=public_key,
+            preshared_key=preshared_key,
+            address=address,
         )
         await self._exec(
             "sh", "-c",
             f"printf %s {shlex.quote(block)} >> {shlex.quote(self._s.awg_config_path)}",
         )
+        return True
 
-    async def remove_peer(self, public_key: str) -> None:
-        # 1) убрать из рантайма
-        await self._exec(
-            "awg", "set", self._s.awg_interface, "peer", public_key, "remove"
-        )
-        # 2) переписать конфиг без этого peer
+    async def _drop_peer_from_file(self, public_key: str) -> None:
         conf = await self.read_server_config()
         new_conf = _remove_peer_block(conf, public_key)
+        if new_conf == conf:
+            return
         await self.write_server_config(new_conf)
+
+    async def _reload_interface(self) -> None:
+        conf = shlex.quote(self._s.awg_config_path)
+        iface = shlex.quote(self.interface_name())
+        await self._sh(
+            f"CONF={conf}\n"
+            f"IFACE={iface}\n"
+            'awg-quick down "$CONF" >/tmp/awg-reload-down.log 2>&1 || '
+            'awg-quick down "$IFACE" >/tmp/awg-reload-down.log 2>&1 || true\n'
+            'awg-quick up "$CONF"\n'
+        )
 
     # ---------- AmneziaVPN clientsTable ----------
     #
@@ -298,7 +373,7 @@ class AwgService:
 
     async def dump(self) -> list[PeerStats]:
         """``awg show <iface> dump`` — табличный машинный вывод."""
-        raw = await self._exec("awg", "show", self._s.awg_interface, "dump")
+        raw = await self._exec("awg", "show", self.interface_name(), "dump")
         lines = [ln for ln in raw.splitlines() if ln.strip()]
         if not lines:
             return []
@@ -352,6 +427,44 @@ class AwgService:
 # ============================================================
 
 _SECTION_RE = re.compile(r"^\[(?P<name>\w+)\]\s*$")
+
+_RELOAD_MARKERS = (
+    "Protocol not supported",
+    "No such device",
+    "not a WireGuard interface",
+    "Unable to access interface",
+)
+
+
+def interface_from_config_path(path: str, fallback: str) -> str:
+    stem = PurePosixPath(path).stem.strip()
+    return stem or fallback
+
+
+def runtime_set_needs_reload(message: str) -> bool:
+    return any(marker in message for marker in _RELOAD_MARKERS)
+
+
+def peer_in_config(conf: str, public_key: str) -> bool:
+    for raw in conf.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() == "PublicKey" and value.strip() == public_key:
+            return True
+    return False
+
+
+def render_server_peer_block(
+    *, public_key: str, preshared_key: str, address: str,
+) -> str:
+    return (
+        f"\n[Peer]\n"
+        f"PublicKey = {public_key}\n"
+        f"PresharedKey = {preshared_key}\n"
+        f"AllowedIPs = {address}\n"
+    )
 
 
 def extract_section(conf: str, name: str) -> dict[str, str] | None:

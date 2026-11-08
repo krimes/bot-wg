@@ -55,8 +55,8 @@ sudo journalctl -u awg-bot -f
 | `ADMIN_IDS` | список telegram-id через запятую (всегда имеют доступ) |
 | `MAIN_ADMIN_ID` | главный админ: пользователи + рассылка. Пусто = первый `ADMIN_IDS` |
 | `AWG_CONTAINER` | имя docker-контейнера с AmneziaWG |
-| `AWG_INTERFACE` | имя wg-интерфейса внутри контейнера (по умолчанию `wg0`) |
-| `AWG_CONFIG_PATH` | путь к конфигу внутри контейнера |
+| `AWG_INTERFACE` | имя интерфейса внутри контейнера (по умолчанию `awg0`; если `AWG_CONFIG_PATH` указывает на `awg0.conf`, берётся имя файла) |
+| `AWG_CONFIG_PATH` | путь к конфигу внутри контейнера (у образа amnezia-awg2 это `/opt/amnezia/awg/awg0.conf`) |
 | `AWG_ENDPOINT_HOST` | публичный host/IP, который попадёт в клиентский `Endpoint` |
 | `AWG_ENDPOINT_PORT` | порт; если пусто — берётся `ListenPort` сервера |
 | `AWG_CLIENT_SUBNET` | подсеть для клиентов |
