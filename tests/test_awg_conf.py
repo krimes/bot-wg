@@ -5,6 +5,8 @@ from bot.services.awg import (
     extract_section,
     merge_interface,
     render_client_config,
+    set_interface_value,
+    with_i1,
 )
 
 
@@ -121,6 +123,32 @@ def test_render_client_config_is_awg_3_1():
     assert "Itime =" not in conf
     assert conf.index("HeaderProtectionKey") < conf.index("[Peer]")
     assert "PersistentKeepalive = 25" in conf
+
+
+def test_with_i1_inserts_header_after_h_keys():
+    obf = with_i1({"H4": "4", "Jc": "1", "I2": "x"}, "<b 1>")
+    assert list(obf) == ["Jc", "H4", "I1", "I2"]
+    assert obf["I1"] == "<b 1>"
+    assert with_i1({"I1": "from-file"}, "  ") == {"I1": "from-file"}
+
+
+def test_set_interface_value_adds_i1_and_keeps_comment():
+    conf = (
+        "[Interface]\n"
+        "PrivateKey = a\n"
+        "# I1 = commented\n"
+        "Jc = 4\n"
+        "\n"
+        "[Peer]\n"
+        "PublicKey = p\n"
+    )
+    new = set_interface_value(conf, "I1", "<b 1>")
+    assert "# I1 = commented" in new
+    assert extract_section(new, "Interface")["I1"] == "<b 1>"
+    assert new.index("I1 = <b 1>") < new.index("[Peer]")
+    again = set_interface_value(new, "I1", "<b 2>")
+    assert again.count("\nI1 = ") == 1
+    assert extract_section(again, "Interface")["I1"] == "<b 2>"
 
 
 def test_render_omits_mtu_when_zero():

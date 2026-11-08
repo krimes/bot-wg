@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # 1280 — рекомендация AmneziaWG 3.1 (S4 и RandomTrailers иначе фрагментируют).
     # 0 — не писать MTU в клиентский .conf.
     awg_client_mtu: int = Field(alias="AWG_CLIENT_MTU", default=1280)
+    # Спец-заголовок I1. Пусто — как в awg0.conf. Если задан и в файле
+    # другое значение, бот дописывает строку и перечитывает интерфейс.
+    awg_i1: str | None = Field(alias="AWG_I1", default=None)
 
     db_path: Path = Field(alias="DB_PATH", default=Path("awg-bot.db"))
 
@@ -111,6 +114,7 @@ class Settings(BaseSettings):
         "main_admin_id",
         "web_password",
         "web_secret",
+        "awg_i1",
         mode="before",
     )
     @classmethod

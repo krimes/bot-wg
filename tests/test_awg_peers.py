@@ -7,6 +7,7 @@ import pytest
 from bot.services.awg import (
     AwgError,
     AwgService,
+    ServerInterface,
     interface_from_config_path,
     runtime_set_needs_reload,
 )
@@ -76,6 +77,77 @@ async def test_add_peer_does_not_reload_on_other_errors():
             public_key="PUBKEY", preshared_key="PSK", address="10.8.1.2/32",
         )
     assert all("awg-quick" not in " ".join(call) for call in svc.calls)
+
+
+def test_build_client_config_puts_env_i1_into_conf():
+    svc = AwgService(SimpleNamespace(
+        awg_endpoint_port=None,
+        awg_client_dns=["1.1.1.1"],
+        awg_client_mtu=1280,
+        awg_client_allowed_ips=["0.0.0.0/0"],
+        awg_endpoint_host="vpn.example",
+        awg_client_keepalive=25,
+        awg_i1="<b 0xc000000001>",
+        awg_config_path="/opt/amnezia/awg/awg0.conf",
+        awg_interface="awg0",
+    ))
+    conf = svc.build_client_config(
+        server=ServerInterface(public_key="P", listen_port=51820, obfuscation={"Jc": "3"}),
+        private_key="c",
+        preshared_key="s",
+        address="10.8.1.2/32",
+    )
+    assert "I1 = <b 0xc000000001>" in conf
+    assert conf.index("Jc") < conf.index("I1")
+
+
+class _I1Awg(AwgService):
+    def __init__(self) -> None:
+        super().__init__(SimpleNamespace(
+            awg_container="amnezia-awg2",
+            awg_interface="wg0",
+            awg_config_path="/opt/amnezia/awg/awg0.conf",
+            awg_clients_table_path="",
+            awg_i1="<b 0xc000000001>",
+        ))
+        self.conf = (
+            "[Interface]\n"
+            "PrivateKey = serverpriv\n"
+            "ListenPort = 51820\n"
+            "# I1 = commented\n"
+            "Jc = 4\n"
+            "\n"
+            "[Peer]\n"
+            "PublicKey = p\n"
+        )
+        self.reloads = 0
+
+    async def _exec(self, *argv: str, input_: str | None = None) -> str:
+        if argv[:1] == ("cat",):
+            return self.conf
+        if argv[:2] == ("sh", "-c") and "cat >" in argv[2]:
+            self.conf = input_ or ""
+            return ""
+        if argv[:2] == ("sh", "-c") and "awg-quick up" in argv[2]:
+            self.reloads += 1
+            return ""
+        if argv[:2] == ("awg", "pubkey"):
+            return "PUB\n"
+        if argv[:2] == ("awg", "showconf"):
+            return "[Interface]\nPrivateKey = serverpriv\nListenPort = 51820\nJc = 4\n"
+        return ""
+
+
+@pytest.mark.asyncio
+async def test_server_interface_writes_missing_i1_and_reloads_once():
+    svc = _I1Awg()
+    server = await svc.server_interface()
+    assert server.obfuscation["I1"] == "<b 0xc000000001>"
+    assert "# I1 = commented" in svc.conf
+    assert "\nI1 = <b 0xc000000001>\n" in svc.conf
+    assert svc.reloads == 1
+    await svc.server_interface()
+    assert svc.reloads == 1
 
 
 @pytest.mark.asyncio

@@ -90,6 +90,7 @@ class AwgSettings(Protocol):
     awg_client_allowed_ips: list[str]
     awg_client_keepalive: int
     awg_client_mtu: int
+    awg_i1: str | None
 
 
 class AwgService:
@@ -159,6 +160,7 @@ class AwgService:
         # 3.1-ключи часто лежат в файле wg0.conf, а старый `awg showconf` их
         # не сериализует. Наоборот, runtime может досыпать S/H, которых нет
         # в файле. Берём объединение: файл как база, showconf перекрывает.
+        await self._ensure_server_i1()
         file_if = extract_section(await self.read_server_config(), "Interface") or {}
         show_if: dict[str, str] | None = None
         try:
@@ -181,7 +183,7 @@ class AwgService:
         if not port_str:
             raise AwgError("В [Interface] нет ListenPort")
 
-        obfuscation = collect_obfuscation(interface)
+        obfuscation = with_i1(collect_obfuscation(interface), self._i1())
         if obfuscation:
             log.debug("AWG obfuscation params: %s", ", ".join(obfuscation))
         return ServerInterface(
@@ -292,6 +294,28 @@ class AwgService:
         if new_conf == conf:
             return
         await self.write_server_config(new_conf)
+
+    def _i1(self) -> str | None:
+        value = (getattr(self._s, "awg_i1", None) or "").strip()
+        return value or None
+
+    async def _ensure_server_i1(self) -> None:
+        """Пишет AWG_I1 в [Interface], если в файле его нет или он другой.
+
+        Клиент и сервер обязаны совпадать. Образ Amnezia оставляет I1
+        закомментированным, showconf его не возвращает — без этой строки
+        заголовок в клиентский .conf не попадает.
+        """
+        value = self._i1()
+        if not value:
+            return
+        conf = await self.read_server_config()
+        current = (extract_section(conf, "Interface") or {}).get("I1")
+        if current == value:
+            return
+        log.info("дописываю I1 в %s", self._s.awg_config_path)
+        await self.write_server_config(set_interface_value(conf, "I1", value))
+        await self._reload_interface()
 
     async def _reload_interface(self) -> None:
         conf = shlex.quote(self._s.awg_config_path)
@@ -413,7 +437,7 @@ class AwgService:
             address=address,
             dns=s.awg_client_dns,
             mtu=s.awg_client_mtu,
-            obfuscation=server.obfuscation,
+            obfuscation=with_i1(server.obfuscation, self._i1()),
             server_public_key=server.public_key,
             preshared_key=preshared_key,
             allowed_ips=s.awg_client_allowed_ips,
@@ -499,6 +523,51 @@ def merge_interface(
         if value != "":
             merged[key] = value
     return merged
+
+
+def with_i1(obfuscation: dict[str, str], i1: str | None) -> dict[str, str]:
+    """Подставляет заголовок I1 из .env и возвращает ключи в каноническом порядке."""
+    value = (i1 or "").strip()
+    if not value:
+        return obfuscation
+    merged = dict(obfuscation)
+    merged["I1"] = value
+    return collect_obfuscation(merged)
+
+
+def set_interface_value(conf: str, key: str, value: str) -> str:
+    """Ставит ``key = value`` в первую секцию [Interface]. Комментарии не трогает."""
+    lines = conf.splitlines()
+    out: list[str] = []
+    in_interface = False
+    replaced = False
+    for raw in lines:
+        stripped = raw.strip()
+        header = _SECTION_RE.match(stripped)
+        if header:
+            if in_interface and not replaced:
+                out.append(f"{key} = {value}")
+                replaced = True
+            in_interface = header.group("name") == "Interface"
+            out.append(raw)
+            continue
+        if in_interface and not replaced:
+            code = stripped.split("#", 1)[0].strip()
+            if "=" in code:
+                name, _, _ = code.partition("=")
+                if name.strip() == key:
+                    out.append(f"{key} = {value}")
+                    replaced = True
+                    continue
+        out.append(raw)
+    if not replaced:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"{key} = {value}")
+    text = "\n".join(out)
+    if not text.endswith("\n"):
+        text += "\n"
+    return text
 
 
 def collect_obfuscation(interface: dict[str, str]) -> dict[str, str]:
