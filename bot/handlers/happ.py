@@ -21,6 +21,7 @@ from bot.keyboards import (
     reply_menu,
 )
 from bot.qrutil import qr_png
+from bot.services.xray import XrayError
 from bot.services.xui import XuiError, XuiService
 
 log = logging.getLogger(__name__)
@@ -129,9 +130,12 @@ async def _create(
             inbound_id=created.inbound_id,
             created_by=message.from_user.id,
         )
-    except XuiError as exc:
-        log.exception("3X-UI error creating happ profile")
-        await status_msg.edit_text(f"❌ Ошибка 3X-UI: <code>{html.escape(str(exc))}</code>")
+    except (XuiError, XrayError) as exc:
+        log.exception("error creating happ profile")
+        label = "Xray" if isinstance(exc, XrayError) else "3X-UI"
+        await status_msg.edit_text(
+            f"❌ Ошибка {label}: <code>{html.escape(str(exc))}</code>"
+        )
         return
     except Exception as exc:  # noqa: BLE001
         log.exception("Unexpected error creating happ profile")
@@ -169,7 +173,7 @@ async def cb_link(call: CallbackQuery, db: Database, xui: XuiService) -> None:
             inbound_id=profile.inbound_id,
             remark=profile.display_name,
         )
-    except XuiError as exc:
+    except (XuiError, XrayError) as exc:
         await call.message.answer(f"❌ {exc}")
         await call.answer()
         return
@@ -191,7 +195,7 @@ async def cb_qr(call: CallbackQuery, db: Database, xui: XuiService) -> None:
             inbound_id=profile.inbound_id,
             remark=profile.display_name,
         )
-    except XuiError as exc:
+    except (XuiError, XrayError) as exc:
         await call.message.answer(f"❌ {exc}")
         await call.answer()
         return

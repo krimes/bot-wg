@@ -9,6 +9,7 @@ from bot.services.xui import (
     XuiError,
     as_dict,
     build_vless_link,
+    client_flow,
     happ_email,
     panel_url,
     subscription_url,
@@ -147,6 +148,111 @@ def test_build_vless_link_maps_raw_network_to_tcp():
         },
     }
     assert _qs(build_vless_link(uuid="u", host="h", inbound=inbound, remark="r"))["type"] == "tcp"
+
+
+XHTTP_INBOUND = {
+    "port": 443,
+    "streamSettings": {
+        "network": "xhttp",
+        "security": "reality",
+        "xhttpSettings": {
+            "path": "/a1b2c3d4e5",
+            "host": "www.googletagmanager.com",
+            "mode": "stream-one",
+            "uplinkHTTPMethod": "POST",
+            "noGRPCHeader": False,
+            "noSSEHeader": False,
+            "sessionPlacement": "path",
+            "xPaddingBytes": "100-1000",
+            "xPaddingObfsMode": False,
+            "scMaxEachPostBytes": "1000000-1000000",
+            "scMinPostsIntervalMs": "30",
+            "scStreamUpServerSecs": "20-80",
+            "scMaxBufferedPosts": 30,
+            "xmux": {
+                "maxConcurrency": "0-0",
+                "maxConnections": "0-0",
+            },
+        },
+        "realitySettings": {
+            "serverNames": ["www.googletagmanager.com"],
+            "shortIds": ["a3f1"],
+            "settings": {
+                "publicKey": "PUBKEY",
+                "fingerprint": "firefox",
+                "spiderX": "/",
+            },
+        },
+    },
+}
+
+
+def test_build_vless_link_xhttp_omits_flow_and_default_extra():
+    link = build_vless_link(
+        uuid="u",
+        host="vpn.example.com",
+        inbound=XHTTP_INBOUND,
+        remark="phone",
+        flow="xtls-rprx-vision",
+    )
+    qs = _qs(link)
+    assert qs["type"] == "xhttp"
+    assert qs["security"] == "reality"
+    assert qs["path"] == "/a1b2c3d4e5"
+    assert qs["mode"] == "stream-one"
+    assert qs["host"] == "www.googletagmanager.com"
+    assert qs["pbk"] == "PUBKEY"
+    assert qs["fp"] == "firefox"
+    assert qs["sni"] == "www.googletagmanager.com"
+    assert "flow" not in qs
+    assert "extra" not in qs
+    assert client_flow(XHTTP_INBOUND["streamSettings"]) == ""
+
+
+def test_build_vless_link_xhttp_puts_nondefault_fields_in_extra():
+    inbound = {
+        "port": 443,
+        "streamSettings": {
+            "network": "splithttp",
+            "security": "reality",
+            "xhttpSettings": {
+                "path": "/up",
+                "mode": "packet-up",
+                "extra": {
+                    "xPaddingBytes": {"from": 200, "to": 400},
+                    "noGRPCHeader": True,
+                    "xPaddingObfsMode": True,
+                    "xPaddingPlacement": "cookie",
+                    "scMinPostsIntervalMs": "100-800",
+                    "noSSEHeader": True,
+                    "scStreamUpServerSecs": "1-100",
+                },
+            },
+            "realitySettings": {
+                "publicKey": "K",
+                "serverNames": ["sni.test"],
+                "shortIds": ["ab"],
+            },
+        },
+    }
+    qs = _qs(build_vless_link(uuid="u", host="h", inbound=inbound, remark="r"))
+    assert qs["type"] == "xhttp"
+    assert qs["mode"] == "packet-up"
+    assert qs["path"] == "/up"
+    extra = json.loads(qs["extra"])
+    assert extra["mode"] == "packet-up"
+    assert extra["xPaddingBytes"] == "200-400"
+    assert extra["noGRPCHeader"] is True
+    assert extra["xPaddingObfsMode"] is True
+    assert extra["xPaddingPlacement"] == "cookie"
+    assert extra["scMinPostsIntervalMs"] == "100-800"
+    assert "noSSEHeader" not in extra
+    assert "scStreamUpServerSecs" not in extra
+    assert "flow" not in qs
+
+
+def test_client_flow_keeps_vision_on_tcp_reality():
+    assert client_flow(REALITY_INBOUND["streamSettings"]) == "xtls-rprx-vision"
 
 
 def test_build_vless_link_rejects_empty_reality_public_key():

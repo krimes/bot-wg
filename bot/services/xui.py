@@ -12,6 +12,8 @@ from uuid import uuid4
 
 import httpx
 
+from bot.services.xray import XrayService
+
 log = logging.getLogger(__name__)
 
 REALITY_FLOW = "xtls-rprx-vision"
@@ -83,20 +85,20 @@ def build_vless_link(
     host: str,
     inbound: dict,
     remark: str,
-    flow: str = REALITY_FLOW,
+    flow: str | None = None,
 ) -> str:
     port = int(inbound["port"])
     stream = as_dict(inbound.get("streamSettings"))
-    network = stream.get("network") or "tcp"
-    if network == "raw":
-        network = "tcp"
+    network = _share_network(stream)
     security = stream.get("security") or "none"
+    if flow is None:
+        flow = client_flow(stream)
 
     settings = as_dict(inbound.get("settings"))
     encryption = settings.get("encryption") or "none"
 
     params: dict[str, str] = {
-        "type": str(network),
+        "type": network,
         "encryption": str(encryption),
         "security": str(security),
     }
@@ -106,6 +108,11 @@ def build_vless_link(
     elif security == "tls":
         params.update(_tls_query(stream))
 
+    if network == "xhttp":
+        params.update(_xhttp_query(stream))
+    elif network == "kcp":
+        params.update(_kcp_query(stream))
+
     if flow and _flow_allowed(network, security):
         params["flow"] = flow
 
@@ -114,8 +121,207 @@ def build_vless_link(
     return f"vless://{uuid}@{_host_port(host, port)}?{query}#{fragment}"
 
 
+def client_flow(stream: dict) -> str:
+    """Vision только на TCP+TLS/Reality. У XHTTP flow пустой."""
+    network = _share_network(stream)
+    security = str(stream.get("security") or "none")
+    if network == "tcp" and security in {"tls", "reality"}:
+        return REALITY_FLOW
+    return ""
+
+
+def _share_network(stream: dict) -> str:
+    raw = str(stream.get("network") or stream.get("method") or "tcp").lower()
+    if raw == "raw":
+        return "tcp"
+    if raw == "splithttp":
+        return "xhttp"
+    if raw == "mkcp":
+        return "kcp"
+    return raw
+
+
 def _flow_allowed(network: str, security: str) -> bool:
     return network == "tcp" and security in {"tls", "reality"}
+
+
+def _xhttp_query(stream: dict) -> dict[str, str]:
+    raw = as_dict(stream.get("xhttpSettings") or stream.get("splithttpSettings"))
+    extra_blob = as_dict(raw.get("extra")) if raw.get("extra") else {}
+    cfg = {**extra_blob}
+    for key, value in raw.items():
+        if key == "extra":
+            continue
+        if value not in (None, ""):
+            cfg[key] = value
+    path = str(cfg.get("path") or "/")
+    mode = str(cfg.get("mode") or "auto")
+    out: dict[str, str] = {"path": path, "mode": mode}
+    host = cfg.get("host") or ""
+    if isinstance(host, list):
+        host = host[0] if host else ""
+    if host:
+        out["host"] = str(host)
+    extra = _xhttp_extra(cfg)
+    if extra:
+        extra["mode"] = mode
+        out["extra"] = json.dumps(extra, separators=(",", ":"), ensure_ascii=False)
+    return out
+
+
+def _xhttp_extra(cfg: dict) -> dict:
+    """Только клиентские поля, которые отличаются от дефолта ядра.
+
+    noSSEHeader, scMaxBufferedPosts и scStreamUpServerSecs — серверные,
+    в ссылку их не кладём. Дефолтный xPaddingBytes тоже не кладём: лишний
+    extra ломает импорт mode у части клиентов.
+    """
+    extra: dict = {}
+    headers = cfg.get("headers") or {}
+    if isinstance(headers, dict):
+        cleaned = {
+            str(k): v
+            for k, v in headers.items()
+            if str(k).lower() != "host" and v not in (None, "")
+        }
+        if cleaned:
+            extra["headers"] = cleaned
+
+    padding = _norm_range(cfg.get("xPaddingBytes"))
+    if padding and padding != "100-1000":
+        extra["xPaddingBytes"] = padding
+
+    if _truthy(cfg.get("noGRPCHeader")):
+        extra["noGRPCHeader"] = True
+
+    if _truthy(cfg.get("xPaddingObfsMode")):
+        extra["xPaddingObfsMode"] = True
+        _put_if(extra, "xPaddingKey", cfg.get("xPaddingKey"), skip={"", "x_padding"})
+        _put_if(extra, "xPaddingHeader", cfg.get("xPaddingHeader"), skip={"", "X-Padding"})
+        _put_if(
+            extra, "xPaddingPlacement", cfg.get("xPaddingPlacement"),
+            skip={"", "queryInHeader"},
+        )
+        _put_if(extra, "xPaddingMethod", cfg.get("xPaddingMethod"), skip={"", "repeat-x"})
+
+    _put_if(extra, "sessionPlacement", cfg.get("sessionPlacement"), skip={"", "path"})
+    _put_if(extra, "sessionKey", cfg.get("sessionKey"), skip={""})
+    # Имена из Xray 26+ / Amnezia 5.1. В server.json лежат именно они.
+    _put_if(extra, "sessionIDPlacement", cfg.get("sessionIDPlacement"), skip={"", "path"})
+    _put_if(extra, "sessionIDKey", cfg.get("sessionIDKey"), skip={""})
+    _put_if(extra, "sessionIDTable", cfg.get("sessionIDTable"), skip={""})
+    session_len = _norm_range(cfg.get("sessionIDLength"))
+    if session_len and session_len not in {"0", "0-0"}:
+        extra["sessionIDLength"] = session_len
+    _put_if(extra, "seqPlacement", cfg.get("seqPlacement"), skip={"", "path"})
+    _put_if(extra, "seqKey", cfg.get("seqKey"), skip={""})
+    method = str(cfg.get("uplinkHTTPMethod") or "")
+    if method and method.upper() != "POST":
+        extra["uplinkHTTPMethod"] = method
+    _put_if(
+        extra, "uplinkDataPlacement", cfg.get("uplinkDataPlacement"),
+        skip={"", "body"},
+    )
+    _put_if(extra, "uplinkDataKey", cfg.get("uplinkDataKey"), skip={""})
+    chunk = _norm_range(cfg.get("uplinkChunkSize"))
+    if chunk and chunk != "0":
+        extra["uplinkChunkSize"] = chunk
+
+    each_post = _norm_range(cfg.get("scMaxEachPostBytes"))
+    if each_post and each_post not in {"1000000", "1000000-1000000"}:
+        extra["scMaxEachPostBytes"] = each_post
+    interval = _norm_range(cfg.get("scMinPostsIntervalMs"))
+    if interval and interval not in {"30", "30-30"}:
+        extra["scMinPostsIntervalMs"] = interval
+
+    xmux = _xmux_extra(cfg.get("xmux"))
+    if xmux:
+        extra["xmux"] = xmux
+    return extra
+
+
+def _put_if(extra: dict, key: str, value, *, skip: set[str]) -> None:
+    if value is None:
+        return
+    text = str(value).strip()
+    if text not in skip:
+        extra[key] = text
+
+
+def _truthy(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _norm_range(value) -> str:
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, dict):
+        left = value.get("from", value.get("From", value.get("left", value.get("Left"))))
+        right = value.get("to", value.get("To", value.get("right", value.get("Right"))))
+        if left in (None, "") and right in (None, ""):
+            return ""
+        if right in (None, "") or str(left) == str(right):
+            return _num_text(left)
+        return f"{_num_text(left)}-{_num_text(right)}"
+    if isinstance(value, (int, float)):
+        return _num_text(value)
+    text = str(value).strip().replace(" ", "")
+    if "-" in text:
+        left, right = text.split("-", 1)
+        if left == right:
+            return left
+    return text
+
+
+def _num_text(value) -> str:
+    if isinstance(value, float) and value == int(value):
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    return str(value).strip()
+
+
+def _xmux_extra(value) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    out: dict = {}
+    for key in (
+        "maxConcurrency",
+        "maxConnections",
+        "cMaxReuseTimes",
+        "hMaxRequestTimes",
+        "hMaxReusableSecs",
+        "hKeepAlivePeriod",
+    ):
+        text = _norm_range(value.get(key))
+        if text and text not in {"0", "0-0"}:
+            raw = value.get(key)
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                out[key] = int(raw) if raw == int(raw) else raw
+            else:
+                out[key] = text if not isinstance(raw, str) else raw
+    return out or None
+
+
+def _kcp_query(stream: dict) -> dict[str, str]:
+    """Поля mKCP из серверного streamSettings. Дефолты ядра не выдумываем."""
+    kcp = as_dict(stream.get("kcpSettings"))
+    out: dict[str, str] = {}
+    header = kcp.get("header")
+    if isinstance(header, dict):
+        header_type = header.get("type")
+        if header_type not in (None, "", "none"):
+            out["headerType"] = str(header_type)
+    seed = kcp.get("seed")
+    if seed not in (None, ""):
+        out["seed"] = str(seed)
+    for key in ("mtu", "tti", "uplinkCapacity", "downlinkCapacity"):
+        value = kcp.get(key)
+        if value not in (None, ""):
+            out[key] = str(value)
+    return out
 
 
 def _reality_query(stream: dict) -> dict[str, str]:
@@ -187,14 +393,26 @@ class XuiService:
         self,
         settings: XuiSettings,
         http: httpx.AsyncClient | None = None,
+        xray: XrayService | None = None,
     ) -> None:
         self._s = settings
+        self._xray = xray
         self._owns_http = http is None
         self._http = http or httpx.AsyncClient(
             timeout=20.0,
             verify=settings.xui_tls_verify,
         )
         self._logged_in = bool(settings.xui_api_token)
+
+    async def _share_inbound(self, panel_inbound: dict) -> dict:
+        """Транспорт ссылки: контейнер Amnezia, если он задан.
+
+        Панель по-прежнему хранит клиента. Порт, Reality и XHTTP — из
+        ``server.json``, как обфускация WG берётся из ``wg0.conf``.
+        """
+        if self._xray is not None and self._xray.enabled:
+            return await self._xray.server_inbound()
+        return panel_inbound
 
     @property
     def enabled(self) -> bool:
@@ -262,17 +480,19 @@ class XuiService:
         inbound_id = self._s.xui_inbound_id
         if not inbound_id:
             raise XuiError("XUI_INBOUND_ID не задан")
-        inbound = await self.get_inbound(inbound_id)
+        panel = await self.get_inbound(inbound_id)
+        inbound = await self._share_inbound(panel)
         host = self._s.xui_client_host or self._s.awg_endpoint_host
         if not host:
             raise XuiError("Задайте XUI_CLIENT_HOST или AWG_ENDPOINT_HOST")
-        # Проверяем inbound до создания клиента — иначе на панели останется сирота.
+        flow = client_flow(as_dict(inbound.get("streamSettings")))
+        # Проверяем конфиг до создания клиента — иначе на панели останется сирота.
         build_vless_link(
             uuid="00000000-0000-0000-0000-000000000000",
             host=host,
             inbound=inbound,
             remark=display_name,
-            flow=REALITY_FLOW,
+            flow=flow,
         )
         email = happ_email(display_name, telegram_id)
         client_uuid = str(uuid4())
@@ -282,7 +502,7 @@ class XuiService:
             "settings": json.dumps({
                 "clients": [{
                     "id": client_uuid,
-                    "flow": REALITY_FLOW,
+                    "flow": flow,
                     "email": email,
                     "limitIp": 0,
                     "totalGB": 0,
@@ -301,7 +521,7 @@ class XuiService:
             host=host,
             inbound=inbound,
             remark=display_name,
-            flow=REALITY_FLOW,
+            flow=flow,
         )
         return HappClient(
             uuid=client_uuid,
@@ -339,7 +559,8 @@ class XuiService:
         return result
 
     async def rebuild_link(self, *, uuid: str, inbound_id: int, remark: str) -> str:
-        inbound = await self.get_inbound(inbound_id)
+        panel = await self.get_inbound(inbound_id)
+        inbound = await self._share_inbound(panel)
         host = self._s.xui_client_host or self._s.awg_endpoint_host
         if not host:
             raise XuiError("Задайте XUI_CLIENT_HOST или AWG_ENDPOINT_HOST")
@@ -348,7 +569,7 @@ class XuiService:
             host=host,
             inbound=inbound,
             remark=remark,
-            flow=REALITY_FLOW,
+            flow=client_flow(as_dict(inbound.get("streamSettings"))),
         )
 
 

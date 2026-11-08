@@ -13,6 +13,7 @@ from bot.db import Database
 from bot.handlers import router as root_router
 from bot.middlewares.auth import AccessMiddleware
 from bot.services.awg import AwgService
+from bot.services.xray import XrayService
 from bot.services.xui import XuiService
 
 
@@ -37,7 +38,8 @@ async def main() -> None:
     await db.init()
 
     awg = AwgService(settings)
-    xui = XuiService(settings)
+    xray = XrayService(settings)
+    xui = XuiService(settings, xray=xray)
 
     # Бэкфилл: убеждаемся, что все профили из БД присутствуют в clientsTable.
     # Это нужно при первом запуске после апгрейда или если файл GUI был очищен.
@@ -71,11 +73,12 @@ async def main() -> None:
     dp.include_router(root_router)
 
     log.info(
-        "Bot started. admins=%s main_admin=%s container=%s iface=%s xui=%s inbound=%s",
+        "Bot started. admins=%s main_admin=%s container=%s iface=%s xray=%s xui=%s inbound=%s",
         settings.admin_ids,
         settings.resolved_main_admin_id(),
         settings.awg_container,
         settings.awg_interface,
+        settings.xray_container or "-",
         bool(settings.xui_host),
         settings.xui_inbound_id,
     )

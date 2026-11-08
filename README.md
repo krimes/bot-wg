@@ -71,10 +71,12 @@ sudo journalctl -u awg-bot -f
 | `XUI_WEB_BASE_PATH` | секретный путь панели, если задан |
 | `XUI_API_TOKEN` | API-токен панели (предпочтительнее логина) |
 | `XUI_USERNAME` / `XUI_PASSWORD` | логин панели, если токена нет |
-| `XUI_INBOUND_ID` | ID inbound VLESS+Reality, в который бот добавляет клиентов |
+| `XUI_INBOUND_ID` | ID inbound, куда бот добавляет клиента Happ |
 | `XUI_CLIENT_HOST` | публичный хост в `vless://`; пусто — `AWG_ENDPOINT_HOST` |
 | `XUI_SUB_BASE` | (опц.) база подписки, например `https://ip:2096/sub` |
 | `XUI_TLS_VERIFY` | проверка TLS сертификата панели, по умолчанию `true` |
+| `XRAY_CONTAINER` | контейнер Amnezia Xray. Пусто — транспорт из inbound панели |
+| `XRAY_CONFIG_PATH` | `server.json` внутри контейнера |
 | `WEB_PASSWORD` | общий пароль веб-выдачи первого WG. Пусто — сайт выключен |
 | `WEB_SECRET` | (опц.) секрет cookie-сессии; иначе считается из пароля |
 | `WEB_HOST` / `WEB_PORT` | где слушать сайт, по умолчанию `0.0.0.0:8080` |
@@ -129,19 +131,36 @@ HTTPS/reverse proxy, если сервер не за VPN.
 
 ## Happ / 3X-UI
 
-Бот **не ставит** панель. На сервере уже должен быть 3X-UI с inbound
-**VLESS + Reality** (обычно порт 443, flow `xtls-rprx-vision`).
+Бот **не ставит** панель и не ставит Xray. Клиента он создаёт в 3X-UI.
+Транспорт ссылки читает из контейнера Amnezia, как WG читает `wg0.conf`:
+
+`docker exec` → `XRAY_CONFIG_PATH` (по умолчанию `/opt/amnezia/xray/server.json`)
+и `xray_public.key` рядом (в `server.json` лежит только Reality privateKey).
+
+Повторная выдача ссылки и QR перечитывает сервер: смена транспорта в
+AmneziaVPN попадает в новый `vless://` без правки `.env`.
+
+- **TCP** (`raw` тоже): клиенту ставится flow `xtls-rprx-vision`.
+- **XHTTP** (`xhttp` / `splithttp`): flow пустой. В ссылку попадают
+  `type=xhttp`, `path`, `mode`, `host` и клиентские поля, которые на
+  сервере отличаются от дефолта ядра. Серверные `noSSEHeader`,
+  `scMaxBufferedPosts`, `scStreamUpServerSecs` в ссылку не пишутся.
+- **mKCP**: `type=kcp` и поля `kcpSettings`, которые есть в файле.
+
+Пустой `XRAY_CONTAINER` оставляет старое поведение: транспорт из inbound панели.
 
 1. В панели: **Inbounds** — запомните ID нужного inbound.
 2. **Settings → Security → API Token** — создайте токен (или используйте логин).
 3. В `.env` бота заполните `XUI_HOST`, `XUI_INBOUND_ID`, токен или логин,
    `XUI_CLIENT_HOST` (публичный IP/домен сервера).
-4. Если бот в Docker, а панель на хосте:
+4. `XRAY_CONTAINER` — имя контейнера Amnezia Xray (`amnezia-xray`).
+5. Если бот в Docker, а панель на хосте:
    `XUI_HOST=http://host.docker.internal:ПОРТ_ПАНЕЛИ`
-5. `/happ phone` или кнопка **➕ Новый Happ** — в чат придут `vless://` и QR.
+6. `/happ phone` или кнопка **➕ Новый Happ** — в чат придут `vless://` и QR.
    В Happ: **+ → импорт из буфера / QR**.
 
-WG и Happ независимы: пустой `XUI_HOST` не ломает AmneziaWG.
+Уже выданные ссылки сами не обновятся: откройте профиль и запросите ключ
+или QR ещё раз. WG и Happ независимы: пустой `XUI_HOST` не ломает AmneziaWG.
 
 ## Команды бота
 
@@ -170,6 +189,7 @@ bot/
 ├── handlers/            # common, profiles, happ, stats
 └── services/
     ├── awg.py           # docker exec + парсинг wg-quick конфига
+    ├── xray.py          # docker exec, server.json Amnezia Xray
     └── xui.py           # REST 3X-UI, сборка vless:// для Happ
 scripts/
 ├── install.sh           # установка в /opt/awg-bot + systemd

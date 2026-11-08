@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     xui_sub_base: str | None = Field(alias="XUI_SUB_BASE", default=None)
     xui_tls_verify: bool = Field(alias="XUI_TLS_VERIFY", default=True)
 
+    # Живой конфиг Amnezia Xray. Пустой XRAY_CONTAINER — транспорт ссылки
+    # берётся из inbound 3X-UI, как раньше.
+    xray_container: str = Field(alias="XRAY_CONTAINER", default="amnezia-xray")
+    xray_config_path: str = Field(
+        alias="XRAY_CONFIG_PATH", default="/opt/amnezia/xray/server.json"
+    )
+
     # Веб-выдача первого WG-конфига. Пустой WEB_PASSWORD — сайт не поднимается.
     web_password: str | None = Field(alias="WEB_PASSWORD", default=None)
     web_secret: str | None = Field(alias="WEB_SECRET", default=None)
