@@ -22,10 +22,11 @@ class LinkButtonFilter(BaseFilter):
 
 def _help_text(settings: Settings, user_id: int) -> str:
     lines = [
-        "🛡 <b>AmneziaWG + Happ</b>\n",
+        "🛡 <b>AmneziaWG, Xray и Happ</b>\n",
         "Команды:",
-        "• /new — добавить профиль (WG или Happ)",
-        "• /happ <code>имя</code> — сразу клиент Happ",
+        "• /new — добавить профиль (WG, Happ или Xray)",
+        "• /xray <code>имя</code> — клиент в Amnezia Xray",
+        "• /happ <code>имя</code> — клиент Happ в 3X-UI",
         "• /list — список профилей",
         "• /stats — статистика подключений",
     ]

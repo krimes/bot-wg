@@ -89,7 +89,7 @@ class XrayService:
     ) -> str:
         """Дописывает VLESS-клиента в server.json и возвращает ``vless://``."""
         if not host.strip():
-            raise XrayError("Задайте XRAY_CLIENT_HOST или AWG_ENDPOINT_HOST")
+            raise XrayError("Задайте XUI_CLIENT_HOST или AWG_ENDPOINT_HOST")
         doc = await self._read_doc()
         share = await self._share_inbound(doc)
         flow = flow_for_stream(share["streamSettings"])
@@ -110,7 +110,7 @@ class XrayService:
 
     async def client_link(self, *, client_id: str, host: str, remark: str) -> str:
         if not host.strip():
-            raise XrayError("Задайте XRAY_CLIENT_HOST или AWG_ENDPOINT_HOST")
+            raise XrayError("Задайте XUI_CLIENT_HOST или AWG_ENDPOINT_HOST")
         share = await self.server_inbound()
         flow = flow_for_stream(share["streamSettings"])
         return _render_link(
@@ -302,3 +302,72 @@ def _with_reality_public_key(raw, *, public_key: str, short_id: str) -> dict:
     if not short_ids and not rs.get("shortId") and short_id:
         rs["shortIds"] = [short_id]
     return rs
+
+
+def flow_for_stream(stream: dict) -> str:
+    from bot.services.xui import client_flow
+
+    return client_flow(stream)
+
+
+def _render_link(
+    *, client_id: str, host: str, remark: str, inbound: dict, flow: str,
+) -> str:
+    from bot.services.xui import build_vless_link
+
+    return build_vless_link(
+        uuid=client_id, host=host, inbound=inbound, remark=remark, flow=flow,
+    )
+
+
+def add_vless_client(
+    doc: dict, *, client_id: str, email: str, flow: str,
+) -> None:
+    """Дописывает клиента в первый VLESS inbound. Как Amnezia: id и flow.
+
+    ``email`` нужен, чтобы отличать клиентов бота в логе Xray. Пустой flow
+    не пишем: на XHTTP и mKCP ядро его не принимает.
+    """
+    inbound = _vless_inbound(doc)
+    settings = inbound.get("settings")
+    if not isinstance(settings, dict):
+        settings = {}
+        inbound["settings"] = settings
+    clients = settings.get("clients")
+    if not isinstance(clients, list):
+        clients = []
+        settings["clients"] = clients
+    for item in clients:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "") == client_id:
+            raise XrayError("Этот UUID уже есть в server.json")
+        if email and item.get("email") == email:
+            raise XrayError("Клиент с таким именем уже есть в server.json")
+    entry: dict = {"id": client_id}
+    if email:
+        entry["email"] = email
+    if flow:
+        entry["flow"] = flow
+    clients.append(entry)
+
+
+def remove_vless_client(doc: dict, client_id: str) -> bool:
+    """Снимает UUID. False — клиента не было, конфиг не менялся."""
+    inbound = _vless_inbound(doc)
+    settings = inbound.get("settings")
+    if not isinstance(settings, dict):
+        return False
+    clients = settings.get("clients")
+    if not isinstance(clients, list):
+        return False
+    kept = []
+    removed = False
+    for item in clients:
+        if isinstance(item, dict) and str(item.get("id") or "") == client_id:
+            removed = True
+            continue
+        kept.append(item)
+    if removed:
+        settings["clients"] = kept
+    return removed

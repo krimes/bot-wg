@@ -67,6 +67,7 @@ async def main() -> None:
     # Прокидываем зависимости в handler'ы через workflow_data
     dp["db"] = db
     dp["awg"] = awg
+    dp["xray"] = xray
     dp["xui"] = xui
     dp["settings"] = settings
 

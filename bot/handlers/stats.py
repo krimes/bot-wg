@@ -28,8 +28,9 @@ async def cmd_stats(
         for p in await db.list_profiles(created_by=message.from_user.id)
     }
     happ_block = await _happ_stats(message.from_user.id, db, xui)
-    if not own_profiles and not happ_block:
-        await message.answer("У вас нет профилей. Создайте через /new или /happ.")
+    xray_rows = await db.list_xray_profiles(created_by=message.from_user.id)
+    if not own_profiles and not happ_block and not xray_rows:
+        await message.answer("У вас нет профилей. Создайте через /new, /happ или /xray.")
         return
 
     parts: list[str] = []
@@ -42,6 +43,11 @@ async def cmd_stats(
             parts.append(_wg_stats_block(own_profiles, peers))
     if happ_block:
         parts.append(happ_block)
+    if xray_rows:
+        names = ", ".join(p.display_name for p in xray_rows)
+        parts.append(
+            f"🛰 <b>Xray</b>\nПрофилей: <b>{len(xray_rows)}</b>\n{names}"
+        )
     await message.answer("\n\n".join(parts))
 
 

@@ -50,35 +50,42 @@ class NewProfileSG(StatesGroup):
 @router.message(F.text == BTN_LIST)
 async def cmd_list(message: Message, state: FSMContext, db: Database) -> None:
     await state.clear()
-    wg = await db.list_profiles(created_by=message.from_user.id)
-    happ = await db.list_happ_profiles(created_by=message.from_user.id)
-    if not wg and not happ:
+    wg, happ, xray = await _own_profiles(db, message.from_user.id)
+    if not wg and not happ and not xray:
         await message.answer(
-            "У вас пока нет профилей. Нажмите «Добавить профиль» и выберите WG или Happ.",
-            reply_markup=profiles_list([], []),
+            "У вас пока нет профилей. Нажмите «Добавить профиль» и выберите WG, Happ или Xray.",
+            reply_markup=profiles_list([], [], []),
         )
         return
     await message.answer(
-        _list_header(len(wg), len(happ)),
-        reply_markup=profiles_list(wg, happ),
+        _list_header(len(wg), len(happ), len(xray)),
+        reply_markup=profiles_list(wg, happ, xray),
     )
 
 
 @router.callback_query(F.data == "prof:back")
 async def cb_back(call: CallbackQuery, db: Database) -> None:
-    wg = await db.list_profiles(created_by=call.from_user.id)
-    happ = await db.list_happ_profiles(created_by=call.from_user.id)
+    wg, happ, xray = await _own_profiles(db, call.from_user.id)
     await call.message.edit_text(
-        _list_header(len(wg), len(happ)),
-        reply_markup=profiles_list(wg, happ),
+        _list_header(len(wg), len(happ), len(xray)),
+        reply_markup=profiles_list(wg, happ, xray),
     )
     await call.answer()
 
 
-def _list_header(wg_n: int, happ_n: int) -> str:
+async def _own_profiles(db: Database, user_id: int):
     return (
-        f"Ваших профилей: <b>{wg_n + happ_n}</b> "
-        f"(WG {wg_n} · Happ {happ_n})\nВыберите для управления:"
+        await db.list_profiles(created_by=user_id),
+        await db.list_happ_profiles(created_by=user_id),
+        await db.list_xray_profiles(created_by=user_id),
+    )
+
+
+def _list_header(wg_n: int, happ_n: int, xray_n: int) -> str:
+    total = wg_n + happ_n + xray_n
+    return (
+        f"Ваших профилей: <b>{total}</b> "
+        f"(WG {wg_n} · Happ {happ_n} · Xray {xray_n})\nВыберите для управления:"
     )
 
 

@@ -175,6 +175,90 @@ class _FakeXray(XrayService):
         raise XrayError(f"missing {' '.join(argv)}")
 
 
+class _ApplyXray(_FakeXray):
+    def __init__(self, doc: dict, public_key: str = "FROM-FILE") -> None:
+        data_dir = "/opt/amnezia/xray"
+        super().__init__({
+            f"{data_dir}/server.json": json.dumps(doc),
+            f"{data_dir}/{PUBLIC_KEY_NAME}": public_key,
+            f"{data_dir}/{SHORT_ID_NAME}": "sid",
+        })
+        self.applied: dict | None = None
+
+    async def _apply_server_config(self, doc: dict) -> None:
+        self.applied = doc
+        self.files[self._s.xray_config_path] = json.dumps(doc)
+
+
+@pytest.mark.asyncio
+async def test_add_client_appends_xhttp_user_without_flow():
+    svc = _ApplyXray(json.loads(json.dumps(SERVER_XHTTP)))
+    link = await svc.add_client(
+        client_id="new-id", email="phone_7", host="vpn.example", remark="phone",
+    )
+    assert svc.applied is not None
+    clients = svc.applied["inbounds"][0]["settings"]["clients"]
+    assert clients[0]["id"] == "srv"
+    assert clients[-1] == {"id": "new-id", "email": "phone_7"}
+    qs = _qs(link)
+    assert qs["type"] == "xhttp"
+    assert "flow" not in qs
+    assert urlparse(link).username == "new-id"
+
+
+@pytest.mark.asyncio
+async def test_add_client_sets_vision_flow_on_tcp():
+    doc = {
+        "inbounds": [{
+            "port": 443,
+            "protocol": "vless",
+            "settings": {"decryption": "none", "clients": [{"id": "keep"}]},
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {"serverNames": ["sni.test"], "shortIds": ["ab"]},
+            },
+        }]
+    }
+    svc = _ApplyXray(doc, public_key="PUB")
+    link = await svc.add_client(
+        client_id="u2", email="lap_1", host="h", remark="lap",
+    )
+    added = svc.applied["inbounds"][0]["settings"]["clients"][-1]
+    assert added["flow"] == "xtls-rprx-vision"
+    assert _qs(link)["flow"] == "xtls-rprx-vision"
+    assert _qs(link)["pbk"] == "PUB"
+
+
+@pytest.mark.asyncio
+async def test_add_client_refuses_duplicate_email_without_restart():
+    doc = json.loads(json.dumps(SERVER_XHTTP))
+    doc["inbounds"][0]["settings"]["clients"].append(
+        {"id": "old", "email": "phone_7"},
+    )
+    svc = _ApplyXray(doc)
+    with pytest.raises(XrayError, match="именем"):
+        await svc.add_client(
+            client_id="new-id", email="phone_7", host="h", remark="phone",
+        )
+    assert svc.applied is None
+
+
+@pytest.mark.asyncio
+async def test_remove_client_drops_uuid_and_skips_missing():
+    doc = json.loads(json.dumps(SERVER_XHTTP))
+    doc["inbounds"][0]["settings"]["clients"].append({"id": "gone", "email": "a"})
+    svc = _ApplyXray(doc)
+    await svc.remove_client("gone")
+    ids = [c["id"] for c in svc.applied["inbounds"][0]["settings"]["clients"]]
+    assert "gone" not in ids
+    assert "srv" in ids
+
+    svc.applied = None
+    await svc.remove_client("missing")
+    assert svc.applied is None
+
+
 @pytest.mark.asyncio
 async def test_server_inbound_reads_config_and_key_file():
     data_dir = "/opt/amnezia/xray"

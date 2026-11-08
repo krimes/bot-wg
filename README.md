@@ -162,14 +162,27 @@ AmneziaVPN попадает в новый `vless://` без правки `.env`.
 Уже выданные ссылки сами не обновятся: откройте профиль и запросите ключ
 или QR ещё раз. WG и Happ независимы: пустой `XUI_HOST` не ломает AmneziaWG.
 
+## Xray из меню
+
+Кнопка **➕ Новый Xray**, пункт **Xray** в «Добавить профиль» или
+`/xray имя` дописывают VLESS-клиента в `server.json` контейнера Amnezia
+(`XRAY_CONTAINER`). Конфиг проверяется `xray -test`, подменяется, контейнер
+перезапускается. В чат приходят `vless://` и QR — транспорт берётся из
+живого файла, как у повторной выдачи Happ.
+
+Хост в ссылке: `XUI_CLIENT_HOST`, иначе `AWG_ENDPOINT_HOST`.
+Удаление профиля снимает UUID с сервера. Пустой `XRAY_CONTAINER` отвечает
+«Xray недоступен» и не трогает WG.
+
 ## Команды бота
 
 | Команда | Действие |
 |---------|----------|
 | `/start`, `/help` | приветствие, главное меню |
 | `/new <имя>` | создать профиль AmneziaWG (имя: `[A-Za-z0-9_-]{2,32}`) |
+| `/xray <имя>` | клиент в Amnezia Xray, ссылка `vless://` |
 | `/happ <имя>` | создать клиента Happ в 3X-UI |
-| `/list` | список профилей WG и Happ |
+| `/list` | список профилей WG, Happ и Xray |
 | `/stats` | статистика WG и трафик Happ |
 | `/users` | *(главный админ)* список пользователей бота |
 | `/useradd <id>` | *(главный админ)* добавить пользователя по Telegram ID |
@@ -186,7 +199,7 @@ bot/
 ├── db.py                # aiosqlite-обёртка
 ├── keyboards.py         # inline + reply клавиатуры
 ├── middlewares/auth.py  # доступ по ADMIN_IDS
-├── handlers/            # common, profiles, happ, stats
+├── handlers/            # common, profiles, happ, xray, stats
 └── services/
     ├── awg.py           # docker exec + парсинг wg-quick конфига
     ├── xray.py          # docker exec, server.json Amnezia Xray

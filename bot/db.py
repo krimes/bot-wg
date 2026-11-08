@@ -35,6 +35,17 @@ CREATE TABLE IF NOT EXISTS happ_profiles (
 
 CREATE INDEX IF NOT EXISTS idx_happ_profiles_created_by ON happ_profiles(created_by);
 
+CREATE TABLE IF NOT EXISTS xray_profiles (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL UNIQUE,
+    uuid            TEXT    NOT NULL UNIQUE,
+    email           TEXT    NOT NULL UNIQUE,
+    created_at      TEXT    NOT NULL,
+    created_by      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_xray_profiles_created_by ON xray_profiles(created_by);
+
 CREATE TABLE IF NOT EXISTS bot_users (
     telegram_id     INTEGER PRIMARY KEY,
     name            TEXT,
@@ -80,6 +91,20 @@ class HappProfile:
     email: str
     sub_id: str
     inbound_id: int
+    created_at: datetime
+    created_by: int
+
+    @property
+    def display_name(self) -> str:
+        return _display_name(self.name, self.created_by)
+
+
+@dataclass(slots=True)
+class XrayProfile:
+    id: int
+    name: str
+    uuid: str
+    email: str
     created_at: datetime
     created_by: int
 
@@ -279,6 +304,73 @@ class Database:
             await conn.commit()
         return profile
 
+    async def add_xray_profile(
+        self,
+        *,
+        name: str,
+        uuid: str,
+        email: str,
+        created_by: int,
+    ) -> XrayProfile:
+        created_at = datetime.now(timezone.utc).isoformat()
+        async with aiosqlite.connect(self._path) as conn:
+            cur = await conn.execute(
+                """
+                INSERT INTO xray_profiles
+                    (name, uuid, email, created_at, created_by)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (name, uuid, email, created_at, created_by),
+            )
+            await conn.commit()
+            profile_id = cur.lastrowid
+        assert profile_id is not None
+        return XrayProfile(
+            id=profile_id,
+            name=name,
+            uuid=uuid,
+            email=email,
+            created_at=datetime.fromisoformat(created_at),
+            created_by=created_by,
+        )
+
+    async def list_xray_profiles(self, created_by: int | None = None) -> list[XrayProfile]:
+        sql = "SELECT * FROM xray_profiles"
+        params: tuple = ()
+        if created_by is not None:
+            sql += " WHERE created_by = ?"
+            params = (created_by,)
+        sql += " ORDER BY id"
+        async with aiosqlite.connect(self._path) as conn:
+            conn.row_factory = aiosqlite.Row
+            rows = await conn.execute_fetchall(sql, params)
+        return [_row_to_xray(row) for row in rows]
+
+    async def get_xray_profile(self, profile_id: int) -> XrayProfile | None:
+        async with aiosqlite.connect(self._path) as conn:
+            conn.row_factory = aiosqlite.Row
+            row = await (await conn.execute(
+                "SELECT * FROM xray_profiles WHERE id = ?", (profile_id,)
+            )).fetchone()
+        return _row_to_xray(row) if row else None
+
+    async def get_xray_profile_by_name(self, name: str) -> XrayProfile | None:
+        async with aiosqlite.connect(self._path) as conn:
+            conn.row_factory = aiosqlite.Row
+            row = await (await conn.execute(
+                "SELECT * FROM xray_profiles WHERE name = ?", (name,)
+            )).fetchone()
+        return _row_to_xray(row) if row else None
+
+    async def delete_xray_profile(self, profile_id: int) -> XrayProfile | None:
+        profile = await self.get_xray_profile(profile_id)
+        if profile is None:
+            return None
+        async with aiosqlite.connect(self._path) as conn:
+            await conn.execute("DELETE FROM xray_profiles WHERE id = ?", (profile_id,))
+            await conn.commit()
+        return profile
+
     async def add_bot_user(
         self,
         *,
@@ -425,6 +517,17 @@ def _row_to_happ(row: aiosqlite.Row) -> HappProfile:
         email=row["email"],
         sub_id=row["sub_id"],
         inbound_id=row["inbound_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        created_by=row["created_by"],
+    )
+
+
+def _row_to_xray(row: aiosqlite.Row) -> XrayProfile:
+    return XrayProfile(
+        id=row["id"],
+        name=row["name"],
+        uuid=row["uuid"],
+        email=row["email"],
         created_at=datetime.fromisoformat(row["created_at"]),
         created_by=row["created_by"],
     )

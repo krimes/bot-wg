@@ -5,12 +5,13 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeybo
 from dataclasses import dataclass
 
 from bot.access import is_main_admin
-from bot.db import HappProfile, Profile
+from bot.db import HappProfile, Profile, XrayProfile
 
 BTN_NEW_PROFILE = "➕ Добавить профиль"
 BTN_NEW_PROFILE_LEGACY = "➕ Новый профиль"
 BTN_NEW_WG = "➕ Новый WG"
 BTN_NEW_HAPP = "➕ Новый Happ"
+BTN_NEW_XRAY = "➕ Новый Xray"
 BTN_LIST = "📋 Список"
 BTN_STATS = "📊 Статистика"
 BTN_HELP = "ℹ️ Помощь"
@@ -20,7 +21,7 @@ BTN_CANCEL = "❌ Отмена"
 
 MENU_BUTTON_TEXTS = frozenset({
     BTN_NEW_PROFILE, BTN_NEW_PROFILE_LEGACY,
-    BTN_NEW_WG, BTN_NEW_HAPP, BTN_LIST, BTN_STATS, BTN_HELP,
+    BTN_NEW_WG, BTN_NEW_HAPP, BTN_NEW_XRAY, BTN_LIST, BTN_STATS, BTN_HELP,
     BTN_USERS, BTN_BROADCAST, BTN_CANCEL,
 })
 
@@ -34,6 +35,7 @@ def main_menu(
     rows = [
         [KeyboardButton(text=BTN_NEW_PROFILE)],
         [KeyboardButton(text=BTN_NEW_WG), KeyboardButton(text=BTN_NEW_HAPP)],
+        [KeyboardButton(text=BTN_NEW_XRAY)],
         [KeyboardButton(text=BTN_LIST), KeyboardButton(text=BTN_STATS)],
         [KeyboardButton(text=BTN_HELP)],
     ]
@@ -78,6 +80,7 @@ def choose_profile_type_kb() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🛡 AmneziaWG", callback_data="new:wg"),
             InlineKeyboardButton(text="📱 Happ", callback_data="new:happ"),
         ],
+        [InlineKeyboardButton(text="🛰 Xray", callback_data="new:xray")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="new:cancel")],
     ])
 
@@ -85,6 +88,7 @@ def choose_profile_type_kb() -> InlineKeyboardMarkup:
 def profiles_list(
     wg: list[Profile],
     happ: list[HappProfile] | None = None,
+    xray: list[XrayProfile] | None = None,
 ) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(
@@ -95,6 +99,10 @@ def profiles_list(
     for p in happ or []:
         rows.append([InlineKeyboardButton(
             text=f"Happ · {p.display_name}", callback_data=f"happ:show:{p.id}"
+        )])
+    for p in xray or []:
+        rows.append([InlineKeyboardButton(
+            text=f"Xray · {p.display_name}", callback_data=f"xray:show:{p.id}"
         )])
     if not rows:
         rows.append([InlineKeyboardButton(
@@ -134,6 +142,26 @@ def happ_actions(profile_id: int) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"happ:del:{profile_id}")],
         [InlineKeyboardButton(text="« Назад", callback_data="prof:back")],
+    ])
+
+
+def xray_actions(profile_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔑 Ключ", callback_data=f"xray:link:{profile_id}"),
+            InlineKeyboardButton(text="📱 QR", callback_data=f"xray:qr:{profile_id}"),
+        ],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"xray:del:{profile_id}")],
+        [InlineKeyboardButton(text="« Назад", callback_data="prof:back")],
+    ])
+
+
+def confirm_delete_xray(profile_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"xray:del_yes:{profile_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=f"xray:show:{profile_id}"),
+        ],
     ])
 
 
